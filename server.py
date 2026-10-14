@@ -227,19 +227,20 @@ mcp = FastMCP(name="Zcash_MCP_Server")
 BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 BECH32M_CONST = 0x2BC830A3
 
-# ZIP 316 Receiver Typecodes
+# ZIP 316 Canonical Receiver Typecodes
+# Note: Per ZIP 316 & ZIP 326, the 2026 Ironwood shielded pool shares the Orchard-protocol
+# receiver (0x03) and incoming viewing key. There is NO 0x04 receiver typecode in ZIP 316.
+# Pool routing (Ironwood vs Orchard) occurs at the transaction builder level per ZIP 326.
 TYPECODE_P2PKH = 0x00
 TYPECODE_P2SH = 0x01
 TYPECODE_SAPLING = 0x02
 TYPECODE_ORCHARD = 0x03
-TYPECODE_IRONWOOD = 0x04  # Zcash 2026 Ironwood Shielded Pool Extension
 
 RECEIVER_TYPE_NAMES: Dict[int, str] = {
     TYPECODE_P2PKH: "p2pkh",
     TYPECODE_P2SH: "p2sh",
     TYPECODE_SAPLING: "sapling",
     TYPECODE_ORCHARD: "orchard",
-    TYPECODE_IRONWOOD: "ironwood",
 }
 
 EXPECTED_UA_RECEIVER_LENGTHS: Dict[int, int] = {
@@ -247,14 +248,12 @@ EXPECTED_UA_RECEIVER_LENGTHS: Dict[int, int] = {
     TYPECODE_P2SH: 20,
     TYPECODE_SAPLING: 43,
     TYPECODE_ORCHARD: 43,
-    TYPECODE_IRONWOOD: 43,  # 11-byte diversifier + 32-byte transmission key
 }
 
 EXPECTED_UFVK_ITEM_LENGTHS: Dict[int, int] = {
     TYPECODE_P2PKH: 65,     # Transparent Account HD Key (32B chaincode + 33B pubkey)
     TYPECODE_SAPLING: 128,  # Sapling Diversifiable Full Viewing Key (ak+nk+ovk+dk)
-    TYPECODE_ORCHARD: 96,   # Orchard Full Viewing Key (ak+nk+rivk)
-    TYPECODE_IRONWOOD: 96,  # Ironwood Full Viewing Key (ak+nk+rivk)
+    TYPECODE_ORCHARD: 96,   # Orchard Full Viewing Key (ak+nk+rivk, shared by Ironwood per ZIP 326)
 }
 
 VALID_UA_HRPS: Dict[str, str] = {
@@ -941,9 +940,10 @@ def validate_zip316_unified_address(
                 }
             )
 
-        # Receiver Priority Selection per ZIP 316 & Ironwood Upgrade:
-        # Ironwood (0x04) -> Orchard (0x03) -> Sapling (0x02) -> Transparent (0x01 / 0x00)
-        priority_order = [TYPECODE_IRONWOOD, TYPECODE_ORCHARD, TYPECODE_SAPLING, TYPECODE_P2SH, TYPECODE_P2PKH]
+        # Receiver Priority Selection per ZIP 316:
+        # Orchard (0x03) -> Sapling (0x02) -> P2SH (0x01) -> P2PKH (0x00)
+        # Note: Per ZIP 326, an Orchard receiver (0x03) enables both Orchard and Ironwood pool routing.
+        priority_order = [TYPECODE_ORCHARD, TYPECODE_SAPLING, TYPECODE_P2SH, TYPECODE_P2PKH]
         priority_fallback_chain: List[Dict[str, Any]] = []
         for rank_idx, pref_tc in enumerate(priority_order, start=1):
             for r in receivers:
@@ -979,9 +979,10 @@ def validate_zip316_unified_address(
             "f4jumble_inverted": True,
             "hrp_padding_verified": True,
             "supports_shielded_memo": True,
-            "supports_ironwood": TYPECODE_IRONWOOD in typecodes_seen,
             "supports_orchard": TYPECODE_ORCHARD in typecodes_seen,
             "supports_sapling": TYPECODE_SAPLING in typecodes_seen,
+            "supports_ironwood": TYPECODE_ORCHARD in typecodes_seen,
+            "zip326_ironwood_compatible": TYPECODE_ORCHARD in typecodes_seen,
             "selected_priority_receiver": selected_receiver,
             "receiver_priority_fallback_chain": priority_fallback_chain,
             "fallback_order_summary": " -> ".join(
@@ -1000,10 +1001,103 @@ def validate_zip316_unified_address(
 
 
 @mcp.tool
+def route_shielded_pool(
+    address: str,
+    target_pool: str = "auto",
+) -> Dict[str, Any]:
+    """
+    Execute ZIP 326 compliant shielded pool routing and transaction receiver resolution.
+
+    Resolves destination shielded pool ('ironwood', 'orchard', 'sapling', 'auto')
+    against a recipient's ZIP 316 Unified Address.
+
+    ZIP 326 SPECIFICATION:
+      - The 2026 Ironwood shielded pool shares the Orchard-protocol receiver (0x03)
+        and incoming viewing key format.
+      - Receivers do NOT encode a non-standard 0x04 typecode; instead, pool selection
+        is decided at the wallet transaction builder level.
+      - If target_pool='ironwood', this tool verifies that the recipient provides an
+        Orchard-protocol receiver (0x03) and routes transaction construction to the Ironwood pool.
+    """
+    val = validate_zip316_unified_address(address)
+    if not val.get("is_valid"):
+        return {
+            "routed": False,
+            "error": f"Invalid recipient address: {val.get('error', 'unknown error')}",
+        }
+
+    pools = {r["pool"]: r for r in val.get("receivers", [])}
+    has_orchard = "orchard" in pools
+    has_sapling = "sapling" in pools
+    has_transparent = "p2pkh" in pools or "p2sh" in pools
+
+    req_pool = target_pool.lower().strip()
+    if req_pool not in ("auto", "ironwood", "orchard", "sapling", "transparent"):
+        raise ValueError("target_pool must be one of: 'auto', 'ironwood', 'orchard', 'sapling', 'transparent'.")
+
+    resolved_pool = ""
+    receiver_used = None
+    protocol_note = ""
+
+    if req_pool in ("auto", "ironwood"):
+        if has_orchard:
+            resolved_pool = "ironwood" if req_pool == "ironwood" or req_pool == "auto" else "orchard"
+            receiver_used = pools["orchard"]
+            protocol_note = (
+                "ZIP 326 Routing: Ironwood pool selected using standard Orchard-protocol receiver (0x03). "
+                "Output will be constructed in the Ironwood shielded bundle."
+            )
+        elif has_sapling:
+            resolved_pool = "sapling"
+            receiver_used = pools["sapling"]
+            protocol_note = "Orchard/Ironwood receiver unavailable; falling back to Sapling (0x02) pool."
+        elif has_transparent:
+            resolved_pool = "transparent"
+            receiver_used = pools.get("p2pkh") or pools.get("p2sh")
+            protocol_note = "CRITICAL: Shielded pools unavailable. Transparent fallback."
+    elif req_pool == "orchard":
+        if has_orchard:
+            resolved_pool = "orchard"
+            receiver_used = pools["orchard"]
+            protocol_note = "Routing directly to Orchard (Halo 2) pool via 0x03 receiver."
+        else:
+            return {
+                "routed": False,
+                "error": "Recipient Unified Address does not include an Orchard receiver (0x03).",
+            }
+    elif req_pool == "sapling":
+        if has_sapling:
+            resolved_pool = "sapling"
+            receiver_used = pools["sapling"]
+            protocol_note = "Routing directly to Sapling (Groth16) pool via 0x02 receiver."
+        else:
+            return {
+                "routed": False,
+                "error": "Recipient Unified Address does not include a Sapling receiver (0x02).",
+            }
+    elif req_pool == "transparent":
+        resolved_pool = "transparent"
+        receiver_used = pools.get("p2pkh") or pools.get("p2sh")
+        protocol_note = "Routing to transparent receiver (Public on-chain graph)."
+
+    return {
+        "routed": True,
+        "standard": "ZIP-326",
+        "recipient_address": address,
+        "target_pool_requested": target_pool,
+        "resolved_shielded_pool": resolved_pool,
+        "receiver_typecode_hex": receiver_used["typecode_hex"] if receiver_used else "",
+        "receiver_pool": receiver_used["pool"] if receiver_used else "",
+        "is_shielded": resolved_pool in ("ironwood", "orchard", "sapling"),
+        "protocol_note": protocol_note,
+        "zip317_action_type": f"{resolved_pool}_actions" if resolved_pool != "transparent" else "transparent_outputs",
+    }
+
+
+@mcp.tool
 def generate_zip316_unified_address(
     seed_identifier: str = "ZECATHON_NODE_07_UA",
     network: str = "mainnet",
-    include_ironwood: bool = False,
     include_orchard: bool = True,
     include_sapling: bool = True,
     include_transparent_p2pkh: bool = True,
@@ -1012,18 +1106,21 @@ def generate_zip316_unified_address(
     Construct a cryptographically valid ZIP 316 Unified Address from deterministic
     seed material or receiver selection flags.
 
-    Supports Ironwood (0x04), Orchard (0x03), Sapling (0x02), and Transparent P2PKH (0x00).
-    Packs receivers into ascending CompactSize TLV records, appends the 16-byte HRP padding,
-    executes the 4-round BLAKE2b F4Jumble Feistel network, and encodes with Bech32m.
+    Conforms to ZIP 316 & ZIP 326 standards:
+      - Packs standard receivers: Orchard (0x03), Sapling (0x02), and Transparent P2PKH (0x00).
+      - Per ZIP 326, the Orchard receiver (0x03) provides native compatibility with both the
+        Orchard pool and the 2026 Ironwood shielded pool without non-standard typecodes.
+      - Packs receivers into ascending CompactSize TLV records, appends the 16-byte HRP padding,
+        executes the 4-round BLAKE2b F4Jumble Feistel network, and encodes with Bech32m.
     """
     net = network.lower().strip()
     hrp_map = {"mainnet": "u", "testnet": "utest", "regtest": "uregtest"}
     if net not in hrp_map:
         raise ValueError("network must be one of: 'mainnet', 'testnet', 'regtest'.")
-    if not (include_ironwood or include_orchard or include_sapling):
+    if not (include_orchard or include_sapling):
         raise ValueError(
             "ZIP 316 Unified Address requires at least one shielded receiver "
-            "(Ironwood, Orchard, or Sapling)."
+            "(Orchard or Sapling)."
         )
 
     items: Dict[int, bytes] = {}
@@ -1039,10 +1136,6 @@ def generate_zip316_unified_address(
         items[TYPECODE_ORCHARD] = hashlib.blake2b(
             f"orchard:{seed_identifier}".encode("utf-8"), digest_size=43
         ).digest()
-    if include_ironwood:
-        items[TYPECODE_IRONWOOD] = hashlib.blake2b(
-            f"ironwood:{seed_identifier}".encode("utf-8"), digest_size=43
-        ).digest()
 
     ua = encode_zip316_container(hrp_map[net], items)
     validation = validate_zip316_unified_address(ua)
@@ -1052,6 +1145,7 @@ def generate_zip316_unified_address(
         "network": net,
         "bundled_pools": [r["pool"] for r in validation.get("receivers", [])],
         "fallback_order_summary": validation.get("fallback_order_summary", ""),
+        "zip326_ironwood_compatible": validation.get("zip326_ironwood_compatible", False),
         "validation": validation,
     }
 
@@ -1067,7 +1161,7 @@ def parse_zip316_ufvk(
     """
     Ingest, validate, and parse a ZIP 316 Unified Full Viewing Key (`uview1...` / `uviewtest1...`).
 
-    Extracts read-only viewing keys across Ironwood (`0x04`), Orchard (`0x03`), Sapling (`0x02`),
+    Extracts read-only viewing keys across Orchard/Ironwood (`0x03`), Sapling (`0x02`),
     and Transparent (`0x00`) pools without ever touching or exposing spending keys.
     Requires an explicit `ufvk` string or `use_demo_fixture=True` (preventing silent key substitution).
     """
@@ -1114,12 +1208,13 @@ def parse_zip316_ufvk(
                 "byte_length": len(raw_val),
                 "key_fingerprint": hashlib.blake2b(raw_val, digest_size=16).hexdigest(),
             }
-            if tc in (TYPECODE_ORCHARD, TYPECODE_IRONWOOD) and len(raw_val) == 96:
+            if tc == TYPECODE_ORCHARD and len(raw_val) == 96:
                 cap_detail["components"] = {
                     "ak_hex": raw_val[:32].hex(),
                     "nk_hex": raw_val[32:64].hex(),
                     "rivk_hex": raw_val[64:96].hex(),
                 }
+                cap_detail["zip326_ironwood_shared"] = True
             elif tc == TYPECODE_SAPLING and len(raw_val) == 128:
                 cap_detail["components"] = {
                     "ak_hex": raw_val[:32].hex(),
@@ -1140,13 +1235,14 @@ def parse_zip316_ufvk(
             "can_spend_funds": False,
             "security_confirmation": (
                 "CONFIRMED: UFVK contains strictly read-only viewing capability keys "
-                "(Ironwood FVK, Orchard FVK, Sapling DFVK, Transparent Account PubKey). Private spending "
+                "(Orchard FVK / Ironwood shared FVK, Sapling DFVK, Transparent Account PubKey). Private spending "
                 "keys (ask, nsk, extsk) are mathematically absent and inaccessible."
             ),
             "selective_disclosure_ready": True,
-            "supports_ironwood": "ironwood" in pools_supported,
             "supports_orchard": "orchard" in pools_supported,
             "supports_sapling": "sapling" in pools_supported,
+            "supports_ironwood": "orchard" in pools_supported,
+            "zip326_ironwood_compatible": "orchard" in pools_supported,
             "pools_supported": pools_supported,
             "viewing_capabilities": capabilities,
         }
@@ -1470,7 +1566,7 @@ def detect_privacy_leaks(
                 "and timing on block explorers, destroying zero-knowledge privacy guarantees."
             ),
             "affected_addresses": transparent_addrs,
-            "remediation": "Upgrade recipient to a ZIP 316 Unified Address with Ironwood (0x04) or Orchard (0x03) enabled.",
+            "remediation": "Upgrade recipient to a ZIP 316 Unified Address with shielded receivers (Orchard 0x03 or Sapling 0x02).",
         })
 
     # Check for address reuse in batch
@@ -1670,10 +1766,8 @@ def fetch_shielded_history(
             continue
         tx_copy = dict(tx)
         if redact_sensitive_memos:
-            memo_raw = tx_copy.pop("memo_utf8", "")
-            tx_copy["memo_sanitized"] = (
-                f"[REDACTED_FOR_AI_PRIVACY // HASH: {hashlib.blake2b(memo_raw.encode('utf-8'), digest_size=8).hexdigest()}]"
-            )
+            tx_copy.pop("memo_utf8", None)
+            tx_copy["memo_sanitized"] = "[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]"
             tx_copy["confidentiality_status"] = "AI_HOST_LEAKAGE_PREVENTED"
         txs.append(tx_copy)
 
@@ -1746,7 +1840,7 @@ def read_memo_contents(
             ledger_category = "Uncategorized Shielded Flow"
 
         output_memo = (
-            f"[REDACTED_MEMO // REF: {reference_code} // HASH: {hashlib.blake2b(memo_bytes, digest_size=8).hexdigest()}]"
+            "[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]"
             if redact_for_ai
             else memo_str
         )
@@ -1763,8 +1857,8 @@ def read_memo_contents(
                 "raw_512_byte_frame_preview_hex": (
                     padded_512_hex[:64] + "..." if not redact_for_ai else "[REDACTED_FRAME]"
                 ),
-                "extracted_reference_code": reference_code,
-                "suggested_chart_of_accounts": ledger_category,
+                "extracted_reference_code": "[REDACTED_METADATA]" if redact_for_ai else reference_code,
+                "suggested_chart_of_accounts": "[REDACTED_METADATA]" if redact_for_ai else ledger_category,
             }
         )
 

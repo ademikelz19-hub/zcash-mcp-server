@@ -21,7 +21,6 @@ from server import (
     DEFAULT_TREASURY_UA,
     DEFAULT_TREASURY_UFVK,
     RECIPIENT_DIRECTORY,
-    TYPECODE_IRONWOOD,
     TYPECODE_ORCHARD,
     TYPECODE_P2PKH,
     TYPECODE_P2SH,
@@ -50,6 +49,7 @@ from server import (
     read_memo_contents,
     reconcile_shielded_ledger,
     render_zip321_qr,
+    route_shielded_pool,
     validate_zip316_unified_address,
     write_compact_size,
 )
@@ -418,12 +418,15 @@ def test_fail_closed_missing_ufvk_without_explicit_fixture() -> None:
     assert fixture_res["provenance"] == "DEMO_FIXTURE"
 
 
-def test_ironwood_pool_support_and_priority_selection() -> None:
-    """Verify Ironwood (0x04) support, ascending TLV packing, and top priority in fallback hierarchy."""
+def test_zip326_ironwood_pool_routing_and_orchard_receiver_reuse() -> None:
+    """
+    Verify ZIP 326 compliance: Ironwood reuses the standard Orchard-protocol
+    receiver (0x03) rather than inventing an unassigned 0x04 typecode.
+    Verifies route_shielded_pool selects the Ironwood pool using the 0x03 receiver.
+    """
     res = generate_zip316_unified_address(
-        seed_identifier="IRONWOOD_VALIDATION_VECTOR_2026",
+        seed_identifier="IRONWOOD_ZIP326_VECTOR_2026",
         network="mainnet",
-        include_ironwood=True,
         include_orchard=True,
         include_sapling=True,
         include_transparent_p2pkh=True,
@@ -431,15 +434,31 @@ def test_ironwood_pool_support_and_priority_selection() -> None:
     ua = res["unified_address"]
     val = validate_zip316_unified_address(ua)
     assert val["is_valid"] is True
+    assert val["zip326_ironwood_compatible"] is True
+    assert val["supports_orchard"] is True
 
-    # Confirm Ironwood is present in bundled receivers
+    # Standard receivers present per ZIP 316
     pools = [r["pool"] for r in val["receivers"]]
-    assert pools == ["p2pkh", "sapling", "orchard", "ironwood"]
+    assert pools == ["p2pkh", "sapling", "orchard"]
 
-    # Confirm Ironwood takes top precedence in fallback chain
-    assert val["selected_priority_receiver"]["pool"] == "ironwood"
-    assert val["selected_priority_receiver"]["typecode_hex"] == "0x04"
-    assert val["fallback_order_summary"].startswith("IRONWOOD (0x04)")
+    # Priority receiver in ZIP 316 is Orchard (0x03)
+    assert val["selected_priority_receiver"]["pool"] == "orchard"
+    assert val["selected_priority_receiver"]["typecode_hex"] == "0x03"
+
+    # Test ZIP 326 pool routing tool: route to Ironwood
+    routing_ironwood = route_shielded_pool(ua, target_pool="ironwood")
+    assert routing_ironwood["routed"] is True
+    assert routing_ironwood["standard"] == "ZIP-326"
+    assert routing_ironwood["resolved_shielded_pool"] == "ironwood"
+    assert routing_ironwood["receiver_typecode_hex"] == "0x03"  # Shares Orchard receiver!
+    assert routing_ironwood["receiver_pool"] == "orchard"
+    assert routing_ironwood["zip317_action_type"] == "ironwood_actions"
+
+    # Route to Sapling specifically
+    routing_sapling = route_shielded_pool(ua, target_pool="sapling")
+    assert routing_sapling["routed"] is True
+    assert routing_sapling["resolved_shielded_pool"] == "sapling"
+    assert routing_sapling["receiver_typecode_hex"] == "0x02"
 
 
 def test_zecshield_privacy_leak_detector() -> None:
@@ -476,12 +495,14 @@ def test_ai_memo_redaction_for_host_safety() -> None:
     history = fetch_shielded_history(DEFAULT_TREASURY_UFVK, redact_sensitive_memos=True)
     assert history["ai_host_redaction_active"] is True
     for tx in history["transactions"]:
-        assert tx["memo_sanitized"].startswith("[REDACTED_FOR_AI_PRIVACY")
+        assert tx["memo_sanitized"] == "[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]"
 
     memos = read_memo_contents(redact_for_ai=True)
     assert memos["ai_host_redaction_active"] is True
     for m in memos["memos"]:
-        assert m["memo_utf8"].startswith("[REDACTED_MEMO")
+        assert m["memo_utf8"] == "[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]"
+        assert m["extracted_reference_code"] == "[REDACTED_METADATA]"
+        assert m["suggested_chart_of_accounts"] == "[REDACTED_METADATA]"
 
 
 

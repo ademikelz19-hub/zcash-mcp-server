@@ -57,8 +57,14 @@ async def run_all_three_tests() -> None:
         )
         t1_val = _extract_json(t1_val_raw)
 
+        t1_route_raw = await client.call_tool(
+            "route_shielded_pool",
+            {"address": generated_ua, "target_pool": "ironwood"},
+        )
+        t1_route = _extract_json(t1_route_raw)
+
         print_section(
-            "TEST 1 // ZIP 316 UNIFIED ADDRESS GENERATION & PRIORITY FALLBACK",
+            "TEST 1 // ZIP 316 UNIFIED ADDRESS & ZIP 326 IRONWOOD POOL ROUTING",
             {
                 "step_1_generated_unified_address": generated_ua,
                 "step_2_validation_result": {
@@ -70,6 +76,7 @@ async def run_all_three_tests() -> None:
                     "fallback_order_summary": t1_val["fallback_order_summary"],
                     "receiver_priority_fallback_chain": t1_val["receiver_priority_fallback_chain"],
                 },
+                "step_3_zip326_ironwood_routing": t1_route,
             },
         )
 

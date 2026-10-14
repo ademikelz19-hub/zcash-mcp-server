@@ -35,6 +35,7 @@ from server import (
     query_zebrad_rpc,
     read_memo_contents,
     reconcile_shielded_ledger,
+    route_shielded_pool,
     validate_zip316_unified_address,
 )
 
@@ -195,8 +196,11 @@ def main() -> None:
     p_gen_ua = sub.add_parser("generate-ua", help="Deterministically generate a ZIP 316 Unified Address")
     p_gen_ua.add_argument("--seed", default="NODE_07_AGENT_VAULT", help="Seed label")
     p_gen_ua.add_argument("--network", default="mainnet", choices=["mainnet", "testnet", "regtest"])
-    p_gen_ua.add_argument("--include-ironwood", action="store_true", help="Include 2026 Ironwood shielded receiver")
     p_gen_ua.add_argument("--include-p2pkh", action="store_true", help="Include transparent P2PKH fallback")
+
+    p_route = sub.add_parser("route-pool", help="Route shielded transfer to Ironwood/Orchard/Sapling per ZIP 326")
+    p_route.add_argument("--address", default=DEFAULT_TREASURY_UA, help="Recipient Unified Address")
+    p_route.add_argument("--target-pool", default="auto", choices=["auto", "ironwood", "orchard", "sapling", "transparent"])
 
     p_ufvk = sub.add_parser("parse-ufvk", help="Parse a ZIP 316 Unified Full Viewing Key (UFVK)")
     p_ufvk.add_argument("--ufvk", default=DEFAULT_TREASURY_UFVK, help="UFVK string (uview1...)")
@@ -230,6 +234,12 @@ def main() -> None:
             "ZECSHIELD // PRIVACY LEAK AUDIT",
             detect_privacy_leaks(address=args.address, amount_zec=args.amount, memo_utf8=args.memo),
         )
+    elif args.command == "route-pool":
+        print_banner("ZIP_326_POOL_ROUTER")
+        print_section(
+            "ZIP 326 // SHIELDED POOL ROUTING SPECIFICATION",
+            route_shielded_pool(address=args.address, target_pool=args.target_pool),
+        )
     elif args.command == "validate-ua":
         print_banner(args.address)
         print_section("ZIP 316 // UNIFIED ADDRESS INSPECTION", validate_zip316_unified_address(args.address))
@@ -237,7 +247,6 @@ def main() -> None:
         res = generate_zip316_unified_address(
             seed_identifier=args.seed,
             network=args.network,
-            include_ironwood=args.include_ironwood,
             include_transparent_p2pkh=args.include_p2pkh,
         )
         print_banner(res["unified_address"])
