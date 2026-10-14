@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "zecshield": {
+      "command": "python",
+      "args": [
+        "-u",
+        "c:/Users/USER/Downloads/zechathon/server.py"
+      ],
+      "env": {
+        "PYTHONUTF8": "1",
+        "ZEBRAD_RPC_URL": "http://127.0.0.1:8181",
+        "LIGHTWALLETD_URL": "http://127.0.0.1:9067",
+        "ZCASH_ALLOW_REMOTE_RPC": "0"
+      }
+    }
+  }
+}

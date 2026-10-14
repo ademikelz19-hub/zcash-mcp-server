@@ -1,0 +1,10 @@
+{
+  "application": "ZecShieldHardenedApp",
+  "version": "1.0.0",
+  "network": "regtest",
+  "rpc_endpoint": "http://127.0.0.1:8181",
+  "recipient": {
+    "address": "u1wujllpw6w6vg6tdn0m700vsysch7vm3zlgru509nutav65s6ucw9rkgkm5u4tsq2up43z3zr5h6ympsj2p9ta2anzv076rjlgj8t5pknjd5hxn2pkrjmr4uj9a2n8c5xclw4y8zk5uvn4j44548z84ty55ldcp0ugxnps2pjp7cqflwp955wsxwkr50u897nx427l2fn4vcejrfhljw",
+    "memo": "REF: 5a8e0f9b31d2c47a // Blinded Hash Commitment"
+  }
+}

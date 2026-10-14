@@ -1,0 +1,45 @@
+name: "ZecShield Privacy Firewall Audit"
+description: "Scan Zcash applications, transaction configs, and source code for privacy breaks, transparent fallbacks, PII, and exposed keys."
+author: "ZecShield Team"
+
+inputs:
+  path:
+    description: "Directory or file to scan for privacy violations"
+    required: false
+    default: "."
+  fail-on-critical:
+    description: "Fail the workflow step if CRITICAL privacy violations are detected"
+    required: false
+    default: "true"
+  output-json:
+    description: "File path to save machine-readable JSON audit report"
+    required: false
+    default: "zecshield-audit-report.json"
+
+outputs:
+  audit-status:
+    description: "Final audit verdict (PASSED or FAILED)"
+    value: ${{ steps.audit.outputs.status }}
+  critical-count:
+    description: "Number of CRITICAL privacy violations detected"
+    value: ${{ steps.audit.outputs.critical_count }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Run ZecShield Privacy Audit
+      id: audit
+      shell: bash
+      run: |
+        python cli.py audit-ci "${{ inputs.path }}" \
+          --json-out "${{ inputs.output-json }}" \
+          $([ "${{ inputs.fail-on-critical }}" = "true" ] && echo "--fail-on-critical")
+
+branding:
+  icon: "shield"
+  color: "green"

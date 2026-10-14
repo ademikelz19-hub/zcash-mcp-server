@@ -1,0 +1,21 @@
+# Zebra Regtest Configuration for ZecShield MCP / Z3 Stack
+# Activates NU5, NU6, and Ironwood (ZIP 326) on Regtest from block 1
+
+[consensus]
+network = "Regtest"
+
+[network]
+listen_addr = "0.0.0.0:29233"
+network = "Regtest"
+
+[rpc]
+listen_addr = "0.0.0.0:29232"
+# Enables full JSON-RPC methods including getblockchaininfo, sendrawtransaction, etc.
+parallel_cpu_threads = 2
+
+[state]
+cache_dir = "/var/lib/zebrad"
+
+[tracing]
+use_color = false
+filter = "info,zebrad=debug"

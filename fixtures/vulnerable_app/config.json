@@ -1,0 +1,10 @@
+{
+  "application": "VulnerableZcashApp",
+  "version": "1.0.0",
+  "network": "regtest",
+  "rpc_endpoint": "http://198.51.100.22:8232",
+  "recipient": {
+    "address": "t1VpYecBW4UudbGcy4ufh61eWxQCoFaUrPs",
+    "memo": "Please confirm order 1042 for user alice@cypherpunk.org"
+  }
+}

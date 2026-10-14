@@ -1,0 +1,81 @@
+# ZecShield MCP // Official Zcash Foundation Z3 Regtest Compose Stack
+# Reference: https://github.com/ZcashFoundation/z3
+# Regtest Guide: https://github.com/ZcashFoundation/z3/blob/main/docs/regtest.md
+#
+# Services:
+#   1. zebrad: Official Zebra full node in regtest mode with Ironwood (ZIP 326) activated
+#   2. zallet: Official Zcash Foundation wallet service
+#   3. rpc-router: Routes JSON-RPC calls to Zebra (chain queries) and Zallet (wallet operations)
+#   4. zaino / lightwalletd: Optional indexing layer for light client gRPC/HTTP
+
+version: "3.8"
+
+services:
+  zebrad:
+    image: zfnd/zebra:latest
+    container_name: zecshield-zebrad
+    restart: unless-stopped
+    command: >
+      zebrad
+      --config /etc/zebrad.toml
+      start
+    environment:
+      - RUST_LOG=info,zebrad=debug
+    ports:
+      - "127.0.0.1:29232:29232" # Zebra JSON-RPC
+      - "127.0.0.1:29233:29233" # Zebra P2P Regtest
+    volumes:
+      - zebra-data:/var/lib/zebrad
+      - ./config/zebrad.toml:/etc/zebrad.toml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", '{"jsonrpc":"2.0","id":"health","method":"getblockchaininfo","params":[]}', "http://127.0.0.1:29232"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  zallet:
+    image: zfnd/zallet:latest
+    container_name: zecshield-zallet
+    restart: unless-stopped
+    depends_on:
+      zebrad:
+        condition: service_healthy
+    command: >
+      zallet
+      --network regtest
+      --zebra-rpc http://zebrad:29232
+      --listen 0.0.0.0:50232
+    ports:
+      - "127.0.0.1:50232:50232" # Zallet Wallet JSON-RPC
+    volumes:
+      - zallet-data:/var/lib/zallet
+    healthcheck:
+      test: ["CMD", "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", '{"jsonrpc":"2.0","id":"health","method":"getwalletinfo","params":[]}', "http://127.0.0.1:50232"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  rpc-router:
+    image: zfnd/z3-router:latest
+    container_name: zecshield-z3-router
+    restart: unless-stopped
+    depends_on:
+      zebrad:
+        condition: service_healthy
+      zallet:
+        condition: service_healthy
+    environment:
+      - ROUTER_PORT=8181
+      - ZEBRAD_RPC_URL=http://zebrad:29232
+      - ZALLET_RPC_URL=http://zallet:50232
+    ports:
+      - "127.0.0.1:8181:8181" # Unified Z3 JSON-RPC Router Endpoint
+    healthcheck:
+      test: ["CMD", "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", '{"jsonrpc":"2.0","id":"health","method":"getblockchaininfo","params":[]}', "http://127.0.0.1:8181"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  zebra-data:
+  zallet-data:

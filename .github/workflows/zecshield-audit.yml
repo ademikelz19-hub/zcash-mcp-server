@@ -1,0 +1,53 @@
+name: "ZecShield Privacy & Security Audit"
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  privacy-firewall:
+    name: "ZecShield Privacy Firewall Scan"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio httpx segno
+
+      - name: Run ZecShield Multi-Layer Test Suite
+        run: |
+          python -m pytest -v
+
+      - name: Run ZecShield CI Privacy Audit on Repository
+        run: |
+          python cli.py audit-ci . --fail-on-critical --json-out audit-report.json
+
+      - name: Verify Vulnerable Fixture Fails (Negative Testing)
+        run: |
+          echo "Testing negative fixture (must fail with exit code 1)..."
+          python cli.py audit-ci fixtures/vulnerable_app && exit 1 || echo "Vulnerable fixture successfully caught and blocked!"
+
+      - name: Verify Fixed Fixture Passes (Positive Testing)
+        run: |
+          echo "Testing positive fixture (must pass with exit code 0)..."
+          python cli.py audit-ci fixtures/fixed_app
+
+      - name: Upload Audit Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zecshield-audit-report
+          path: audit-report.json

@@ -221,10 +221,17 @@ def main() -> None:
     p_fee.add_argument("--sapling-spends", type=int, default=0)
     p_fee.add_argument("--sapling-outputs", type=int, default=0)
 
+    p_ci = sub.add_parser("audit-ci", help="Execute ZecShield automated privacy audit for CI/CD workflows")
+    p_ci.add_argument("target", nargs="?", default=".", help="Directory or file path to scan")
+    p_ci.add_argument("--fail-on-critical", action="store_true", default=True, help="Exit with code 1 on CRITICAL findings")
+    p_ci.add_argument("--json-out", default="", help="Path to write JSON audit report")
+
     args = parser.parse_args()
 
     if args.command in (None, "demo"):
         run_full_demo()
+    elif args.command == "audit-ci":
+        sys.exit(run_ci_audit(target=args.target, fail_on_critical=args.fail_on_critical, json_out=args.json_out))
     elif args.command == "reconcile":
         print_banner("AEGIS_Z_RECONCILER")
         print_section("AEGIS-Z // SHIELDED LEDGER RECONCILIATION", reconcile_shielded_ledger())
@@ -271,6 +278,130 @@ def main() -> None:
                 sapling_outputs=args.sapling_outputs,
             ),
         )
+
+
+def run_ci_audit(target: str = ".", fail_on_critical: bool = True, json_out: str = "") -> int:
+    import os
+    import re
+    import zecshield_firewall
+
+    print_banner("ZECSHIELD // CI PRIVACY & COMPLIANCE SCANNER")
+    print(f"[*] Scanning path: {os.path.abspath(target)}")
+
+    all_findings: List[Dict[str, Any]] = []
+    scanned_count = 0
+
+    if os.path.isfile(target):
+        files_to_scan = [target]
+    else:
+        files_to_scan = []
+        for root, dirs, files in os.walk(target):
+            dirs[:] = [d for d in dirs if d not in (".git", ".pytest_cache", "__pycache__", "venv", ".venv", "env", "node_modules", ".gemini")]
+            for f in files:
+                if f.endswith((".py", ".json", ".yaml", ".yml", ".toml", ".env", ".md", ".txt")):
+                    files_to_scan.append(os.path.join(root, f))
+
+    for filepath in files_to_scan:
+        rel_path = os.path.relpath(filepath, target)
+        if any(skip in filepath for skip in ("test_privacy_firewall.py", "zecshield_firewall.py", "cli.py", "test_server.py")):
+            continue
+        scanned_count += 1
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except Exception:
+            continue
+
+        # 1. Spending Key Exposure
+        for match in zecshield_firewall.REGEX_SPENDING_KEY.finditer(content):
+            all_findings.append({
+                "id": "ZEC-SEC-001",
+                "name": "WALLET_SPENDING_KEY_IN_CODE",
+                "severity": "CRITICAL",
+                "file": rel_path,
+                "evidence": f"Hardcoded spending key: {match.group(0)[:16]}...",
+                "remediation": "Remove secret keys from source code and configurations immediately.",
+            })
+
+        # 2. Transparent Address Exposure & Fallback
+        for line_no, line in enumerate(content.splitlines(), 1):
+            if "t1" in line or "t3" in line or "tm" in line:
+                t_matches = re.findall(r"\b(t[13][a-km-zA-HJ-NP-Z1-9]{33})\b", line)
+                for t in t_matches:
+                    all_findings.append({
+                        "id": "ZEC-PRIV-001",
+                        "name": "TRANSPARENT_ADDRESS_EXPOSURE",
+                        "severity": "CRITICAL",
+                        "file": f"{rel_path}:{line_no}",
+                        "evidence": f"Hardcoded transparent address: {t}",
+                        "remediation": "Switch recipient to a ZIP 316 Unified Address with shielded receivers.",
+                    })
+
+            # 3. PII in memo lines
+            if "memo" in line.lower():
+                emails = zecshield_firewall.REGEX_EMAIL.findall(line)
+                for em in emails:
+                    all_findings.append({
+                        "id": "ZEC-PRIV-002",
+                        "name": "PII_EMAIL_IN_MEMO",
+                        "severity": "CRITICAL",
+                        "file": f"{rel_path}:{line_no}",
+                        "evidence": f"Cleartext email address in memo config: {em}",
+                        "remediation": "Remove email from memo fields or use zero-knowledge commitments.",
+                    })
+                ips = [ip for ip in zecshield_firewall.REGEX_IPV4.findall(line) if not ip.startswith("127.") and ip != "0.0.0.0"]
+                for ip in ips:
+                    all_findings.append({
+                        "id": "ZEC-PRIV-003",
+                        "name": "PII_IP_ADDRESS_IN_MEMO",
+                        "severity": "CRITICAL",
+                        "file": f"{rel_path}:{line_no}",
+                        "evidence": f"IP address in memo config: {ip}",
+                        "remediation": "Strip IP addresses before transmission.",
+                    })
+
+            # 4. Remote cleartext RPC
+            if "http://" in line and not any(h in line for h in ("127.0.0.1", "localhost", "::1")):
+                if "rpc" in line.lower() or "node" in line.lower() or "zebrad" in line.lower():
+                    all_findings.append({
+                        "id": "ZEC-NET-002",
+                        "name": "CLEARTEXT_REMOTE_RPC",
+                        "severity": "CRITICAL",
+                        "file": f"{rel_path}:{line_no}",
+                        "evidence": f"Insecure remote RPC target: {line.strip()[:60]}",
+                        "remediation": "Bind RPC services strictly to 127.0.0.1 loopback or use TLS.",
+                    })
+
+    critical_count = sum(1 for f in all_findings if f["severity"] == "CRITICAL")
+    high_count = sum(1 for f in all_findings if f["severity"] == "HIGH")
+
+    passed = (critical_count == 0 and high_count == 0) if fail_on_critical else True
+
+    report = {
+        "status": "PASSED" if passed else "FAILED",
+        "scanner": "ZecShield Privacy Firewall CI Action v1.0",
+        "files_scanned": scanned_count,
+        "total_findings": len(all_findings),
+        "critical_violations": critical_count,
+        "high_violations": high_count,
+        "findings": all_findings,
+    }
+
+    print_section("ZECSHIELD // CI AUDIT SUMMARY", report)
+
+    if json_out:
+        try:
+            with open(json_out, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2)
+            print(f"[*] JSON audit report exported to: {json_out}")
+        except Exception as e:
+            print(f"[!] Failed to write JSON output: {e}")
+
+    if not passed:
+        print(f"\n[X] CI BUILD FAILED: {critical_count} CRITICAL privacy violation(s) detected.")
+        return 1
+    print("\n[+] CI BUILD PASSED: Zero critical privacy leaks detected.")
+    return 0
 
 
 if __name__ == "__main__":

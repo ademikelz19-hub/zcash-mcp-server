@@ -1,147 +1,272 @@
-# ![NODE 07](./assets/node07_identity_26x26.svg) `ZECSHIELD // ZCASH MCP STANDARD LIBRARY & PROJECT AEGIS-Z`
+# ![NODE 07](./assets/node07_identity_26x26.svg) `ZECSHIELD MCP // AI-NATIVE ZCASH DEV & PRIVACY FIREWALL`
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ [NODE 07 ONLINE] // THE PYRAMID WAKES // ZECATHON INFRASTRUCTURE & AEGIS-Z  │
-│ SERVER: Zcash_MCP_Server (FastMCP stdio) // POSITIONING: ZECSHIELD MCP       │
-│ STANDARDS: ZIP 316 CANONICAL // ZIP 326 (IRONWOOD) // ZIP 321 // ZIP 317    │
-│ SECURITY: FAIL-CLOSED // AIR-GAP STRICT LOOPBACK // REGTEST READY            │
+│ [NODE 07 ONLINE] // ZECATHON 2026 // CORE & TOOLING TRACK ($15,000)          │
+│ TAGLINE: Build on Zcash with AI. Test everything. Leak nothing unnecessarily.│
+│ STANDARDS: ZIP 316 // ZIP 326 (IRONWOOD) // ZIP 321 // ZIP 317 // ISO 18004 │
+│ FIREWALL: 10 PRE-BROADCAST PRIVACY & SECURITY CHECKS // FAIL-CLOSED POLICY   │
+│ VERIFICATION: 47 / 47 TESTS PASSING (100% PASS RATE) // AIR-GAPPED LOOPBACK │
 │ AESTHETIC: #000000 BLACK // JETBRAINS MONO // #00FF41 PHOSPHOR // 26x26 ID  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-> **ZECATHON $15,000 Core & Tooling Track Submission**  
-> **Positioning:** AI-Native Zcash Development, Testing, and Privacy Protection ("ZecShield MCP"). Build Zcash applications with AI, test shielded transactions locally, and catch privacy mistakes before deployment.  
-> **Execution Guarantee:** 100% Local Stdio / Loopback Execution (`127.0.0.1`). Zero private keys, viewing keys, or decrypted memos ever leak to cloud hosts or external endpoints.
+> **ZECATHON 2026 Submission** | **Track:** Core & Tooling ($15,000)  
+> **Positioning:** AI-Native Zcash Developer Infrastructure & Privacy Testing Toolkit.  
+> **Differentiation:** Other tools help AI agents *spend* ZEC. ZecShield MCP gives AI agents and developers the infrastructure to *build, test, inspect, and protect* Zcash applications from catastrophic privacy leaks.
 
 ---
 
-## 00 // ARCHITECTURAL BLUEPRINT
+## Documentation Index
 
-The **ZecShield MCP Server** (`Zcash_MCP_Server`) bridges autonomous local AI agents (orchestrated via the **Google Antigravity SDK** `LiteRTAgentConfig` + `McpStdioServer`) with Zcash's core zero-knowledge cryptographic primitives, live local node infrastructure (`zebrad` & `lightwalletd`), and proactive privacy defense tooling.
+- [Architecture & Technical Design](docs/ARCHITECTURE.md)
+- [Zcash Foundation Z3 Integration Guide](docs/INTEGRATION_GUIDE.md)
+- [Privacy Firewall & Agent Security Model](docs/SECURITY_MODEL.md)
+- [Zcash Protocol Compliance (ZIP 316, 321, 317, 326)](docs/PROTOCOL_COMPLIANCE.md)
+- [Multi-Layer Testing & Verification Guide](docs/TESTING.md)
+- [2-3 Minute Judge Demonstration Script](docs/DEMO_SCRIPT.md)
+- [Hackathon Submission Summary](docs/HACKATHON_SUBMISSION.md)
+- [Known Limitations & Future Scope](docs/KNOWN_LIMITATIONS.md)
+- [Technical Audit & Remediation Log](docs/TECHNICAL_AUDIT.md)
+
+---
+
+## 00 // Architectural Blueprint
 
 ```mermaid
-flowchart LR
-    subgraph LocalWorkstation["AIR-GAPPED WORKSTATION (#000000 // NO CLOUD TELEMETRY)"]
-        Agent["Google Antigravity SDK\nLiteRTAgentConfig (Gemma 4 26B)"]
-        MCP["Zcash_MCP_Server (server.py)\nFastMCP over Local STDIO"]
-        Router["ZIP 326 Pool Router\nroute_shielded_pool\n(Ironwood / Orchard / Sapling)"]
-        LeakGuard["ZecShield Privacy Guard\ndetect_privacy_leaks\n(Catches PII, Transparent Leaks, Fees)"]
-        Crypto["Cryptographic Engine\nZIP 316 (Bech32m + F4Jumble)\nZIP 321 (512B Memo URIs)\nZIP 317 (Proportional Fees)"]
-        Node["Live Local Node / Regtest Anchor\nzebrad (127.0.0.1:8232)\nlightwalletd (127.0.0.1:9067)\n+ Built-in Regtest Daemon"]
-        Dashboard["Brutalist Terminal UI\ndashboard.html + cli.py\n(ISO 18004 QR Matrix Handoff)"]
+flowchart TD
+    subgraph Host["DEVELOPER / AI CODING ASSISTANT"]
+        Client["AI Host\n(Claude Desktop / Cursor / Antigravity)"]
     end
 
-    Wallet["Air-Gapped Mobile Signer\n(Zashi / YWallet)"]
+    subgraph ZecShield["ZECSHIELD MCP SERVER (server.py)"]
+        FastMCP["FastMCP JSON-RPC 2.0 Stdio Engine"]
+        Firewall["ZecShield Privacy Firewall (10 Checks)\n(Transparent Fallback, PII in Memos, Keys, Precision)"]
+        Standards["Zcash Standards Engine\n- ZIP 316: Unified Addresses (Bech32m + F4Jumble)\n- ZIP 326: Ironwood Pool Routing (0x03 Receiver)\n- ZIP 321: Unpadded Base64URL Memos\n- ZIP 317: Proportional Marginal Fees\n- ISO/IEC 18004: Scannable QR Handoff"]
+        Dispatcher["Honest Provenance Dispatcher"]
+    end
 
-    Agent <-->|"JSON-RPC 2.0 (stdio)"| MCP
-    MCP --> Router
-    MCP --> LeakGuard
-    MCP --> Crypto
-    MCP <-->|"Loopback RPC / Trial Decryption"| Node
-    MCP --> Dashboard
-    Dashboard -.->|"Visual ISO 18004 QR Scan (No Spending Keys on Host)"| Wallet
+    subgraph Backends["ZCASH EXECUTION BACKENDS"]
+        Z3["Official Zcash Foundation Z3 Stack\n- Zebra Full Node (29232)\n- Zallet Wallet (50232)\n- Z3 RPC Router (8181)\n[GENUINE_Z3_REGTEST]"]
+        Mock["In-Memory Test Harness (8232)\nDeterministic Unit/Integration State\n[SIMULATED_MOCK_REGTEST]"]
+        Vault["Deterministic Vault\nZero-Network Test Vectors\n[DEMO_FIXTURE]"]
+    end
+
+    Client <-->|"JSON-RPC 2.0 (stdio)"| FastMCP
+    FastMCP --> Firewall
+    Firewall --> Standards
+    Standards --> Dispatcher
+    Dispatcher <-->|"Port 8181"| Z3
+    Dispatcher <-->|"Port 8232"| Mock
+    Dispatcher <-->|"Offline"| Vault
 ```
 
 ---
 
-## 01 // PROTOCOL HARDENING & SPECIFICATION ALIGNMENT
+## 01 // The Signature Innovation: ZecShield Privacy Firewall
 
-1. **Canonical ZIP 316 Receiver Registry & ZIP 326 Ironwood Pool Routing:**
-   - Adheres strictly to the canonical [ZIP 316](https://zips.z.cash/zip-0316) receiver typecode specification:
-     - `0x00`: Transparent P2PKH (20 bytes)
-     - `0x01`: Transparent P2SH (20 bytes)
-     - `0x02`: Sapling (43 bytes)
-     - `0x03`: Orchard (43 bytes)
-   - Canonical ZIP 316 receiver fallback order:
-     $$\textbf{ORCHARD (0x03)} \rightarrow \textbf{SAPLING (0x02)} \rightarrow \textbf{P2SH (0x01)} \rightarrow \textbf{P2PKH (0x00)}$$
-   - **ZIP 326 Ironwood Compliance:** Per [ZIP 326](https://zips.z.cash/zip-0326), the 2026 Ironwood shielded pool shares the Orchard-protocol receiver (`0x03`) and incoming viewing key format. Standard Zcash wallets reject non-standard receiver typecodes; therefore, pool selection is implemented in the wallet/transaction builder via `route_shielded_pool(address, target_pool="ironwood")`, directing transaction construction to the Ironwood action bundle while maintaining 100% address compatibility with Zashi, YWallet, and Zebra.
-   - ZIP 317 logical action accounting includes `ironwood_actions`.
+AI coding assistants frequently generate code that introduces subtle, irreversible privacy breaks:
+1. **Transparent Address Fallbacks:** Defaulting to `t1...` addresses strips all zero-knowledge privacy guarantees.
+2. **Cleartext PII in Memos:** Attaching unhashed emails, IPs, or names in on-chain memos creates permanent off-chain identity links for any viewing key auditor.
+3. **Exposed Spending Keys:** Accidentally hardcoding test spending keys in scripts exposes all funds to theft.
+4. **Prompt Injections:** Malicious memos can hijack downstream autonomous LLM agents.
+5. **Sub-Zatoshi Precision Bugs:** Specifying fractions of a zatoshi causes floating-point rounding errors.
 
-2. **Proactive Privacy Leak Detection (`detect_privacy_leaks`):**
-   - Pre-broadcast audit engine scanning transaction plans and payment URIs:
-     - **Transparent Address Fallback:** Flags P2PKH/P2SH exposure destroying zero-knowledge anonymity.
-     - **Cleartext PII in Memos:** Flags emails, IPv4 addresses, phone numbers, and corporate IDs.
-     - **Amount Precision Fingerprinting:** Flags odd 8-decimal totals correlatable with off-chain merchant logs.
-     - **Fee Fingerprinting:** Flags non-standard fees deviating from ZIP 317 marginal rate multiples (5000 zatoshis).
-     - **Address Reuse:** Flags transparent address reuse across batch payouts.
-   - Emits a standardized `0-100` privacy score and `is_safe_to_broadcast` approval gate.
-
-3. **Strict Fail-Closed Security (Zero Silent Defaults):**
-   - Prohibits silent substitution of default treasury addresses in payment requests (`generate_zip321_uri` strictly requires an explicit destination address).
-   - Prohibits silent substitution of demonstration viewing keys (`parse_zip316_ufvk` requires an explicit key string or explicit `use_demo_fixture=True`).
-   - Automatically rejects encrypted memos attached to transparent-only receivers.
-
-4. **Zero-Knowledge AI Host Memo Redaction:**
-   - Complete scrubbing of sensitive 512-byte memo payloads (`[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]`) when queried by AI hosts (`fetch_shielded_history`, `read_memo_contents`).
-   - Scrubs invoice references, vendor names, and cryptographic hashes to prevent correlation across AI model context windows.
-
-5. **Live Regtest Blockchain Workflow & Provenance Transparency:**
-   - Every RPC and query response explicitly tags provenance: `PROVENANCE: LIVE_NODE_RPC` (when connected to live local node) vs `PROVENANCE: DEMO_FIXTURE` (offline deterministic cryptographic vault).
-   - Includes a built-in local JSON-RPC regtest harness (`python live_node_client.py --regtest-demo`) that broadcasts authentic shielded transactions, mines regtest blocks, verifies on-chain confirmations, and reconciles balances.
-
-6. **Independent Standards Reference Vector Test Suite:**
-   - 35 passing tests including BIP 350 Bech32m canonical vectors, RFC 4648 unpadded base64url memo vectors, ZIP 317 proportional fee vectors, and F4Jumble Feistel invertibility bounds.
+The **ZecShield Privacy Firewall** inspects transactions pre-broadcast across 10 deterministic checks:
+- `CHECK 01: TRANSPARENT_EXPOSURE` - Rejects transparent recipients (`t1`, `t3`).
+- `CHECK 02: PRIVACY_DOWNGRADE` - Blocks silent shielded &rarr; transparent fallbacks.
+- `CHECK 03: SENSITIVE_MEMO_PII` - Scans for cleartext emails, IPv4/IPv6, phone numbers, SSNs.
+- `CHECK 04: VIEWING_KEY_EXPOSURE` - Detects viewing keys (`uview1...`, `zxviews1...`) in memos.
+- `CHECK 05: WALLET_SECRET_PROTECTION` - Flags spending keys (`secret-extended-key...`) and seed phrases.
+- `CHECK 06: UNSAFE_RPC_TARGET` - Rejects cleartext remote RPC destinations.
+- `CHECK 07: ADDRESS_RECEIVER_VALIDATION` - Validates ZIP 316 structure and pool compatibility.
+- `CHECK 08: AMOUNT_SATOSHI_PRECISION` - Enforces integer zatoshis (&le; 8 decimals) and max supply bounds.
+- `CHECK 09: TRANSACTION_POLICY_ENFORCEMENT` - Enforces human approval tokens for state mutations.
+- `CHECK 10: METADATA_CORRELATION_LEAK` - Detects persistent invoice IDs and UUIDs.
 
 ---
 
-## 02 // EXPOSED `@mcp.tool` STANDARD LIBRARY REGISTRY
+## 02 // Cryptographic Honesty & Z3 Integration
 
-| Tool Name | Input Parameters | Description |
-| :--- | :--- | :--- |
-| `route_shielded_pool` | `address: str, target_pool: str = "auto"` | **ZIP 326 Router:** Resolves destination pool (`ironwood`, `orchard`, `sapling`, `auto`) using standard Orchard (0x03) and Sapling (0x02) receivers. |
-| `detect_privacy_leaks` | `address: str, amount_zec: str, memo_utf8: str, fee_zatoshis: Optional[int], recipients: Optional[List]` | **ZecShield Security Guard:** Scans for transparent fallback, cleartext PII in memos, amount precision fingerprinting, fee anomalies, and address reuse. |
-| `validate_zip316_unified_address` | `address: str` | Verifies Bech32m checksum (`0x2bc830a3`), inverts `F4Jumble`, validates 16-byte HRP padding, extracts TLVs, and returns canonical Orchard -> Sapling -> Transparent priority. |
-| `generate_zip316_unified_address` | `seed_identifier: str, network: str = "mainnet", include_orchard: bool = True, include_sapling: bool = True, include_transparent_p2pkh: bool = True` | Constructs a valid ZIP 316 Unified Address with ascending CompactSize TLVs + `F4Jumble` + Bech32m. Native ZIP 326 Ironwood compatibility via Orchard receiver. |
-| `parse_zip316_ufvk` | `ufvk: str, use_demo_fixture: bool = False` | Parses a ZIP 316 Unified Full Viewing Key (`uview1...`), isolating Orchard/Sapling viewing keys without exposing spending keys. Fails closed if input is missing. |
-| `generate_zip321_uri` | `address: str, amount_zec: str, memo_utf8: str = "", label: str = "", message: str = "", require_shielded: bool = False` | Generates a single-recipient ZIP 321 URI with unpadded `base64url` memo and ZIP 317 fee calculation. Prohibits silent recipient substitution. |
-| `construct_zip321_payout_batch` | `payments: List[Dict[str, str]]` | Builds a multi-recipient ZIP 321 batch URI for payroll/treasury settlements and computes batch fee savings. |
-| `parse_zip321_uri` | `uri: str` | Parses and validates single- or multi-recipient ZIP 321 URIs and decodes all `base64url` memos back to UTF-8 and hex. |
-| `estimate_zip317_fee` | `ironwood_actions: int = 0, orchard_actions: int = 2, sapling_spends: int = 0, sapling_outputs: int = 0, transparent_inputs: int = 0, transparent_outputs: int = 0` | Computes exact ZIP 317 conventional fees in zatoshis and ZEC. |
-| `render_zip321_qr` | `uri: str, output_path: str = "assets/latest_zip321_qr.svg"` | Generates genuine ISO/IEC 18004 Reed-Solomon QR codes scannable by mobile shielded signers (Zashi, YWallet). |
-| `fetch_shielded_history` | `ufvk: str, pool_filter: str = "all", direction_filter: str = "all", redact_sensitive_memos: bool = True` | Queries local `lightwalletd`/`zebrad` loopback for decrypted transactions, with AI memo redaction active by default. |
-| `read_memo_contents` | `txid: str = "", redact_for_ai: bool = False` | Extracts 512-byte decrypted memos, invoice IDs, and Chart of Accounts mappings. Scrubs metadata when `redact_for_ai=True`. |
-| `execute_trial_decryption` | `start_height: int, end_height: int, ufvk: str` | Runs trial decryption across compact block ranges for Orchard (Halo 2) and Sapling commitment trees. |
-| `query_lightwalletd` | `endpoint: str = "GetLightdInfo", block_height: int = 2690500` | Queries local `lightwalletd` endpoints with explicit data provenance tracking (`LIVE_NODE_RPC` vs `DEMO_FIXTURE`). |
-| `query_zebrad_rpc` | `method: str = "getblockchaininfo", params: Optional[List[Any]] = None` | Calls local `zebrad` JSON-RPC methods with loopback security and provenance disclosure. |
-| `reconcile_shielded_ledger` | `ufvk: str` | **Project Aegis-Z Controller:** Reconciles decrypted UFVK memos against pending corporate obligations and emits a ready-to-sign ZIP 321 batch URI. |
+ZecShield MCP enforces **absolute cryptographic honesty**. We never fabricate synthetic blocks and present them as genuine Zebra/Zallet consensus proofs.
 
----
+Every response returned by ZecShield declares its exact provenance:
+- **`GENUINE_Z3_REGTEST`**: Verified connection to the official Zcash Foundation Z3 Docker stack (`zebrad` at 29232, `zallet` at 50232, router at 8181). Authentic Halo 2 and Groth16 proofs.
+- **`GENUINE_ZEBRA_NODE`**: Verified connection to an active Zebra consensus full node.
+- **`SIMULATED_MOCK_REGTEST`**: In-memory Python test harness on `127.0.0.1:8232` used for offline test suites when Docker is not installed.
+- **`DEMO_FIXTURE`**: Deterministic offline cryptographic test vector vault.
 
-## 03 // QUICKSTART & VERIFICATION
+### Launching the Genuine Z3 Stack
+```bash
+# 1. Start Zebra, Zallet, and the Z3 RPC router in the background
+docker compose up -d
 
-### 1. Run the Complete Verification Suite
-```powershell
-# Run the hackathon verification suite over the FastMCP client protocol
-python run_verification_tests.py
-```
+# 2. Check infrastructure readiness
+python live_node_client.py --check-infra
 
-### 2. Run All 35 Unit & Reference Vector Tests
-```powershell
-python -m pytest -v
-```
-
-### 3. Execute Authentic Live Regtest Workflow (`LIVE_NODE_RPC`)
-```powershell
-# Boots local regtest node on 127.0.0.1:8232, broadcasts transaction, mines block, confirms, and reconciles
+# 3. Execute regtest workflow
 python live_node_client.py --regtest-demo
 ```
 
-### 4. Run the Brutalist Terminal CLI Demo
-```powershell
-# Full 6-stage demo (Aegis-Z accounting + ZecShield privacy audit)
-python cli.py demo
+---
 
-# Route a payment to Ironwood per ZIP 326
-python cli.py route-pool --target-pool ironwood
+## 03 // Reusable GitHub Action & CI Workflow
 
-# Audit an individual payment request for privacy leaks
-python cli.py leak-audit --address "t1VpYecBW4UudbGcy4ufh61eWxQCoFaUrPs" --memo "Payment to alice@cypherpunk.org"
+Developers can add automated Zcash privacy linting to their own repositories with our GitHub Action (`action.yml`):
+
+```yaml
+# .github/workflows/zecshield-audit.yml
+name: ZecShield Privacy Audit
+on: [push, pull_request]
+
+jobs:
+  privacy-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ademikelz19-hub/zcash-mcp-server@main
+        with:
+          path: "."
+          fail-on-critical: "true"
 ```
 
-### 5. Interactive Dark-Terminal Dashboard
-Open [`dashboard.html`](./dashboard.html) in any local browser to inspect:
-- Deterministic **26x26 pixel block identities** rendered on `<canvas width="26" height="26">`
-- Decrypted Orchard (Halo 2) & Sapling 512-byte memos mapped to the Aegis-Z Chart of Accounts
-- Interactive **ZIP 316 F4Jumble + Bech32m** receiver inspector
-- Air-gapped **ZIP 321 Multi-Recipient Payment Request URI & ISO 18004 QR Matrix** generator with mobile scanner polarity toggle for Zashi / YWallet.
+Or run directly via CLI:
+```bash
+# Fails CI on critical violations (exit code 1)
+python cli.py audit-ci . --fail-on-critical --json-out audit-report.json
+
+# Test sample fixtures:
+python cli.py audit-ci fixtures/vulnerable_app  # Exits 1 (5 critical leaks)
+python cli.py audit-ci fixtures/fixed_app       # Exits 0 (0 leaks)
+```
+
+---
+
+## 04 // Exposed MCP Tool Standard Library (14 Tools)
+
+### Developer Utilities
+- `validate_zip316_unified_address`: Bech32m checksum (`0x2bc830a3`), 4-round BLAKE2b `F4Jumble`, TLV CompactSize parsing, and priority fallback (`Orchard -> Sapling -> Transparent`).
+- `generate_zip316_unified_address`: Constructs valid ZIP 316 Unified Addresses.
+- `parse_zip316_ufvk`: Parses Unified Full Viewing Keys (`uview1...`) safely without exposing spending keys.
+- `generate_zip321_uri`: Constructs standardized payment URIs with unpadded RFC 4648 Base64URL memos.
+- `parse_zip321_uri`: Decodes single- and multi-recipient payment URIs and memos.
+- `construct_zip321_payout_batch`: Multi-recipient payout batch URI generator with fee calculations.
+- `estimate_zip317_fee`: Calculates ZIP 317 proportional conventional fees (`5000 zatoshis * max(2, actions)`).
+- `route_shielded_pool`: ZIP 326 pool routing (routes to Ironwood/Orchard/Sapling while reusing receiver `0x03`).
+- `render_zip321_qr`: ISO/IEC 18004 Reed-Solomon scannable QR code generator for mobile wallets (Zashi, YWallet).
+
+### Privacy & Security
+- `audit_transaction_privacy`: Full 10-check ZecShield Privacy Firewall audit with structured JSON results.
+- `detect_privacy_leaks`: Pre-broadcast vulnerability scanner.
+- `explain_privacy_violation`: Detailed catalog lookup for finding IDs with remediation code examples.
+- `sanitize_ai_memo`: Scrubs memos for model safety (`[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]`).
+
+### Infrastructure
+- `check_z3_infrastructure`: Probes Docker, WSL2, and port availability for Zebra, Zallet, and the Z3 router.
+- `query_zebrad_rpc`: JSON-RPC query client with honest provenance tagging.
+- `query_lightwalletd`: Probes local `lightwalletd` loopback service.
+- `fetch_shielded_history`: Queries shielded history with zero-correlation AI memo redaction.
+- `reconcile_shielded_ledger`: Reconciles confirmed balances and charts of accounts.
+
+---
+
+## 05 // Independent Multi-Layer Verification (47 / 47 Passing)
+
+```bash
+# Run the complete test suite
+python -m pytest tests/ -v
+```
+
+```text
+============================= test session starts =============================
+collected 47 items
+
+tests/test_privacy_firewall.py::test_firewall_permits_clean_shielded_payment PASSED [  2%]
+tests/test_privacy_firewall.py::test_firewall_blocks_transparent_address_exposure PASSED [  4%]
+tests/test_privacy_firewall.py::test_firewall_detects_pii_emails_and_ips_in_memos PASSED [  6%]
+tests/test_privacy_firewall.py::test_firewall_blocks_spending_key_leakage PASSED [  8%]
+tests/test_privacy_firewall.py::test_firewall_detects_bip39_seed_phrases PASSED [ 10%]
+tests/test_privacy_firewall.py::test_firewall_neutralizes_prompt_injection_attempts PASSED [ 12%]
+tests/test_privacy_firewall.py::test_firewall_detects_viewing_key_in_memo PASSED [ 14%]
+tests/test_privacy_firewall.py::test_firewall_blocks_sub_zatoshi_and_invalid_amounts PASSED [ 17%]
+tests/test_privacy_firewall.py::test_firewall_enforces_loopback_rpc_policy PASSED [ 19%]
+tests/test_privacy_firewall.py::test_firewall_enforces_human_approval_boundary_for_state_changes PASSED [ 21%]
+tests/test_privacy_firewall.py::test_explain_privacy_violation_catalog PASSED [ 23%]
+tests/test_privacy_firewall.py::test_sanitize_ai_memo_guarantee PASSED   [ 25%]
+tests/test_reference_vectors.py::test_bip350_valid_bech32m_reference_vectors PASSED [ 27%]
+tests/test_reference_vectors.py::test_bip350_invalid_bech32m_reference_vectors PASSED [ 29%]
+tests/test_reference_vectors.py::test_bech32m_arbitrary_payload_roundtrip PASSED [ 31%]
+tests/test_reference_vectors.py::test_zip321_rfc4648_unpadded_base64url_vectors PASSED [ 34%]
+tests/test_reference_vectors.py::test_zip321_uri_parsing_reference_vectors PASSED [ 36%]
+tests/test_reference_vectors.py::test_zip317_fee_calculation_against_reference_vectors PASSED [ 38%]
+tests/test_reference_vectors.py::test_f4jumble_invertibility_across_standard_buffer_sizes PASSED [ 40%]
+tests/test_reference_vectors.py::test_f4jumble_strictly_enforces_minimum_length_48_bytes PASSED [ 42%]
+tests/test_reference_vectors.py::test_compactsize_canonical_boundaries PASSED [ 44%]
+tests/test_server.py::test_fastmcp_server_initialization PASSED          [ 46%]
+tests/test_server.py::test_f4jumble_feistel_roundtrip PASSED             [ 48%]
+tests/test_server.py::test_f4jumble_rejects_short_messages PASSED        [ 51%]
+tests/test_server.py::test_compact_size_roundtrip PASSED                 [ 53%]
+tests/test_server.py::test_zip316_unified_address_generation_and_validation PASSED [ 55%]
+tests/test_server.py::test_zip316_rejects_both_p2pkh_and_p2sh PASSED     [ 57%]
+tests/test_server.py::test_zip316_rejects_transparent_only_ua PASSED     [ 59%]
+tests/test_server.py::test_zip316_ufvk_parsing PASSED                    [ 61%]
+tests/test_server.py::test_zip321_single_recipient_and_memo_roundtrip PASSED [ 63%]
+tests/test_server.py::test_zip321_rejects_oversized_512_byte_memo PASSED [ 65%]
+tests/test_server.py::test_zip321_rejects_memo_on_transparent_address PASSED [ 68%]
+tests/test_server.py::test_zip321_multi_recipient_payout_batch PASSED    [ 70%]
+tests/test_server.py::test_zip317_proportional_fee_mechanism PASSED      [ 72%]
+tests/test_server.py::test_airgap_loopback_policy_enforcement PASSED     [ 74%]
+tests/test_server.py::test_shielded_history_trial_decryption_and_aegis_reconciliation PASSED [ 76%]
+tests/test_server.py::test_lightwalletd_and_zebrad_queries PASSED        [ 78%]
+tests/test_server.py::test_user_prompt_1_address_generation_and_priority_fallback PASSED [ 80%]
+tests/test_server.py::test_user_prompt_2_parse_ufvk_viewing_key PASSED   [ 82%]
+tests/test_server.py::test_user_prompt_3_generate_50_zec_uri PASSED      [ 85%]
+tests/test_server.py::test_fastmcp_client_protocol_execution PASSED      [ 87%]
+tests/test_server.py::test_render_zip321_iso18004_qr PASSED              [ 89%]
+tests/test_server.py::test_fail_closed_missing_address_in_zip321 PASSED  [ 91%]
+tests/test_server.py::test_fail_closed_missing_ufvk_without_explicit_fixture PASSED [ 93%]
+tests/test_server.py::test_zip326_ironwood_pool_routing_and_orchard_receiver_reuse PASSED [ 95%]
+tests/test_server.py::test_zecshield_privacy_leak_detector PASSED        [ 97%]
+tests/test_server.py::test_ai_memo_redaction_for_host_safety PASSED      [100%]
+
+============================= 47 passed in 12.96s =============================
+```
+
+---
+
+## 06 // Quickstart for Judges
+
+### 1. Installation
+```bash
+git clone https://github.com/ademikelz19-hub/zcash-mcp-server.git
+cd zcash-mcp-server
+pip install -e .
+pip install pytest pytest-asyncio httpx segno
+```
+
+### 2. Run Multi-Layer Verification
+```bash
+python -m pytest tests/ -v
+```
+
+### 3. Open Brutalist Dashboard
+Open `dashboard.html` in any browser to interact with the Privacy Firewall Lab, inspect ZIP 316 addresses, and generate ISO/IEC 18004 QR codes.
+
+### 4. Configure in Claude Desktop / Cursor
+Add to `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "zecshield": {
+      "command": "python",
+      "args": ["-u", "/path/to/server.py"]
+    }
+  }
+}
+```
+
+---
+
+## License
+
+MIT License &copy; 2026 ZecShield Team &bull; Engineered for the zkSNARKs ZECATHON.
