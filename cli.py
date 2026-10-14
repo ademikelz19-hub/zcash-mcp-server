@@ -22,6 +22,7 @@ from server import (
     DEFAULT_TREASURY_UFVK,
     RECIPIENT_DIRECTORY,
     construct_zip321_payout_batch,
+    detect_privacy_leaks,
     estimate_zip317_fee,
     execute_trial_decryption,
     fetch_shielded_history,
@@ -168,6 +169,14 @@ def run_full_demo() -> None:
     reconciliation = reconcile_shielded_ledger(DEFAULT_TREASURY_UFVK)
     print_section("05 // PROJECT AEGIS-Z FORENSIC RECONCILIATION & ZIP 321 PAYOUT URI", reconciliation)
 
+    # 6. ZecShield Privacy Leak Detection
+    leak_audit = detect_privacy_leaks(
+        address=DEFAULT_TREASURY_UA,
+        amount_zec="50.00",
+        memo_utf8="GRANT-2026 // Ecosystem Development",
+    )
+    print_section("06 // ZECSHIELD PRIVACY AUDIT & LEAK SCANNER", leak_audit)
+
 
 def main() -> None:
     _enable_windows_ansi()
@@ -186,6 +195,7 @@ def main() -> None:
     p_gen_ua = sub.add_parser("generate-ua", help="Deterministically generate a ZIP 316 Unified Address")
     p_gen_ua.add_argument("--seed", default="NODE_07_AGENT_VAULT", help="Seed label")
     p_gen_ua.add_argument("--network", default="mainnet", choices=["mainnet", "testnet", "regtest"])
+    p_gen_ua.add_argument("--include-ironwood", action="store_true", help="Include 2026 Ironwood shielded receiver")
     p_gen_ua.add_argument("--include-p2pkh", action="store_true", help="Include transparent P2PKH fallback")
 
     p_ufvk = sub.add_parser("parse-ufvk", help="Parse a ZIP 316 Unified Full Viewing Key (UFVK)")
@@ -196,7 +206,13 @@ def main() -> None:
     p_zip321.add_argument("--amount", default="42.00")
     p_zip321.add_argument("--memo", default="PAYROLL-OCT-2026 // Shielded Core Dev Disbursement")
 
+    p_leak = sub.add_parser("leak-audit", help="Audit a transaction plan for privacy leaks")
+    p_leak.add_argument("--address", default=DEFAULT_TREASURY_UA)
+    p_leak.add_argument("--amount", default="50.00")
+    p_leak.add_argument("--memo", default="")
+
     p_fee = sub.add_parser("fee", help="Calculate ZIP 317 proportional transfer fee")
+    p_fee.add_argument("--ironwood-actions", type=int, default=0)
     p_fee.add_argument("--orchard-actions", type=int, default=2)
     p_fee.add_argument("--sapling-spends", type=int, default=0)
     p_fee.add_argument("--sapling-outputs", type=int, default=0)
@@ -208,6 +224,12 @@ def main() -> None:
     elif args.command == "reconcile":
         print_banner("AEGIS_Z_RECONCILER")
         print_section("AEGIS-Z // SHIELDED LEDGER RECONCILIATION", reconcile_shielded_ledger())
+    elif args.command == "leak-audit":
+        print_banner("ZECSHIELD_PRIVACY_AUDIT")
+        print_section(
+            "ZECSHIELD // PRIVACY LEAK AUDIT",
+            detect_privacy_leaks(address=args.address, amount_zec=args.amount, memo_utf8=args.memo),
+        )
     elif args.command == "validate-ua":
         print_banner(args.address)
         print_section("ZIP 316 // UNIFIED ADDRESS INSPECTION", validate_zip316_unified_address(args.address))
@@ -215,6 +237,7 @@ def main() -> None:
         res = generate_zip316_unified_address(
             seed_identifier=args.seed,
             network=args.network,
+            include_ironwood=args.include_ironwood,
             include_transparent_p2pkh=args.include_p2pkh,
         )
         print_banner(res["unified_address"])
@@ -233,6 +256,7 @@ def main() -> None:
         print_section(
             "ZIP 317 // PROPORTIONAL FEE CALCULATION",
             estimate_zip317_fee(
+                ironwood_actions=args.ironwood_actions,
                 orchard_actions=args.orchard_actions,
                 sapling_spends=args.sapling_spends,
                 sapling_outputs=args.sapling_outputs,

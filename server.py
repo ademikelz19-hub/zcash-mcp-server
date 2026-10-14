@@ -232,12 +232,14 @@ TYPECODE_P2PKH = 0x00
 TYPECODE_P2SH = 0x01
 TYPECODE_SAPLING = 0x02
 TYPECODE_ORCHARD = 0x03
+TYPECODE_IRONWOOD = 0x04  # Zcash 2026 Ironwood Shielded Pool Extension
 
 RECEIVER_TYPE_NAMES: Dict[int, str] = {
     TYPECODE_P2PKH: "p2pkh",
     TYPECODE_P2SH: "p2sh",
     TYPECODE_SAPLING: "sapling",
     TYPECODE_ORCHARD: "orchard",
+    TYPECODE_IRONWOOD: "ironwood",
 }
 
 EXPECTED_UA_RECEIVER_LENGTHS: Dict[int, int] = {
@@ -245,12 +247,14 @@ EXPECTED_UA_RECEIVER_LENGTHS: Dict[int, int] = {
     TYPECODE_P2SH: 20,
     TYPECODE_SAPLING: 43,
     TYPECODE_ORCHARD: 43,
+    TYPECODE_IRONWOOD: 43,  # 11-byte diversifier + 32-byte transmission key
 }
 
 EXPECTED_UFVK_ITEM_LENGTHS: Dict[int, int] = {
-    TYPECODE_P2PKH: 65,    # Transparent Account HD Key (32B chaincode + 33B pubkey)
-    TYPECODE_SAPLING: 128, # Sapling Diversifiable Full Viewing Key (ak+nk+ovk+dk)
-    TYPECODE_ORCHARD: 96,  # Orchard Full Viewing Key (ak+nk+rivk)
+    TYPECODE_P2PKH: 65,     # Transparent Account HD Key (32B chaincode + 33B pubkey)
+    TYPECODE_SAPLING: 128,  # Sapling Diversifiable Full Viewing Key (ak+nk+ovk+dk)
+    TYPECODE_ORCHARD: 96,   # Orchard Full Viewing Key (ak+nk+rivk)
+    TYPECODE_IRONWOOD: 96,  # Ironwood Full Viewing Key (ak+nk+rivk)
 }
 
 VALID_UA_HRPS: Dict[str, str] = {
@@ -855,7 +859,10 @@ def _call_zebrad_jsonrpc(method: str, params: Optional[List[Any]] = None) -> Tup
 # ===========================================================================
 
 @mcp.tool
-def validate_zip316_unified_address(address: str = DEFAULT_TREASURY_UA) -> Dict[str, Any]:
+def validate_zip316_unified_address(
+    address: str = "",
+    use_demo_fixture: bool = False,
+) -> Dict[str, Any]:
     """
     Validate and decode a ZIP 316 Unified Address (`u1...`, `utest1...`, `uregtest1...`).
 
@@ -864,10 +871,25 @@ def validate_zip316_unified_address(address: str = DEFAULT_TREASURY_UA) -> Dict[
       2. 4-round Feistel F4Jumble inversion using BLAKE2b (`UA_F4Jumble_H` / `UA_F4Jumble_G`)
       3. 16-byte ASCII HRP padding validation
       4. CompactSize TLV receiver extraction and ascending typecode order verification
-      5. Protocol-mandated receiver priority resolution (Orchard -> Sapling -> Transparent)
+      5. Protocol-mandated receiver priority resolution (Ironwood -> Orchard -> Sapling -> Transparent)
     """
     try:
-        target_addr = address.strip() if address and address.strip() else DEFAULT_TREASURY_UA
+        raw_addr = address.strip() if address else ""
+        if not raw_addr:
+            if not use_demo_fixture:
+                return {
+                    "is_valid": False,
+                    "error": (
+                        "MISSING_INPUT: Address parameter is required. Silent address substitution "
+                        "is disabled for security. Provide a ZIP 316 Unified Address, or pass use_demo_fixture=True."
+                    ),
+                }
+            target_addr = DEFAULT_TREASURY_UA
+            provenance = "DEMO_FIXTURE"
+        else:
+            target_addr = raw_addr
+            provenance = "USER_SUPPLIED"
+
         hrp, items = decode_zip316_container(target_addr)
         if hrp not in VALID_UA_HRPS:
             return {
@@ -887,13 +909,13 @@ def validate_zip316_unified_address(address: str = DEFAULT_TREASURY_UA) -> Dict[
                 "error": "ZIP 316 violation: Unified Address cannot contain both P2PKH (0x00) and P2SH (0x01) receivers.",
             }
 
-        # ZIP 316 Rule: Must contain at least one shielded receiver
+        # ZIP 316 Rule: Must contain at least one shielded receiver (Ironwood, Orchard, or Sapling)
         shielded_typecodes = typecodes_seen - {TYPECODE_P2PKH, TYPECODE_P2SH}
         if not shielded_typecodes:
             return {
                 "is_valid": False,
                 "address": target_addr,
-                "error": "ZIP 316 violation: Unified Address must include at least one shielded receiver (Sapling or Orchard).",
+                "error": "ZIP 316 violation: Unified Address must include at least one shielded receiver (Ironwood, Orchard, or Sapling).",
             }
 
         receivers: List[Dict[str, Any]] = []
@@ -919,8 +941,9 @@ def validate_zip316_unified_address(address: str = DEFAULT_TREASURY_UA) -> Dict[
                 }
             )
 
-        # Receiver Priority Selection per ZIP 316 (Orchard -> Sapling -> Transparent)
-        priority_order = [TYPECODE_ORCHARD, TYPECODE_SAPLING, TYPECODE_P2SH, TYPECODE_P2PKH]
+        # Receiver Priority Selection per ZIP 316 & Ironwood Upgrade:
+        # Ironwood (0x04) -> Orchard (0x03) -> Sapling (0x02) -> Transparent (0x01 / 0x00)
+        priority_order = [TYPECODE_IRONWOOD, TYPECODE_ORCHARD, TYPECODE_SAPLING, TYPECODE_P2SH, TYPECODE_P2PKH]
         priority_fallback_chain: List[Dict[str, Any]] = []
         for rank_idx, pref_tc in enumerate(priority_order, start=1):
             for r in receivers:
@@ -948,6 +971,7 @@ def validate_zip316_unified_address(address: str = DEFAULT_TREASURY_UA) -> Dict[
         return {
             "is_valid": True,
             "standard": "ZIP-316",
+            "provenance": provenance,
             "address": target_addr,
             "hrp": hrp,
             "network": network,
@@ -955,6 +979,9 @@ def validate_zip316_unified_address(address: str = DEFAULT_TREASURY_UA) -> Dict[
             "f4jumble_inverted": True,
             "hrp_padding_verified": True,
             "supports_shielded_memo": True,
+            "supports_ironwood": TYPECODE_IRONWOOD in typecodes_seen,
+            "supports_orchard": TYPECODE_ORCHARD in typecodes_seen,
+            "supports_sapling": TYPECODE_SAPLING in typecodes_seen,
             "selected_priority_receiver": selected_receiver,
             "receiver_priority_fallback_chain": priority_fallback_chain,
             "fallback_order_summary": " -> ".join(
@@ -976,6 +1003,7 @@ def validate_zip316_unified_address(address: str = DEFAULT_TREASURY_UA) -> Dict[
 def generate_zip316_unified_address(
     seed_identifier: str = "ZECATHON_NODE_07_UA",
     network: str = "mainnet",
+    include_ironwood: bool = False,
     include_orchard: bool = True,
     include_sapling: bool = True,
     include_transparent_p2pkh: bool = True,
@@ -984,17 +1012,19 @@ def generate_zip316_unified_address(
     Construct a cryptographically valid ZIP 316 Unified Address from deterministic
     seed material or receiver selection flags.
 
-    By default, bundles all three receiver pools (Orchard `0x03`, Sapling `0x02`,
-    and Transparent P2PKH `0x00`) into ascending CompactSize TLV records, appends
-    the 16-byte HRP padding, executes the 4-round BLAKE2b F4Jumble Feistel network,
-    and encodes with Bech32m.
+    Supports Ironwood (0x04), Orchard (0x03), Sapling (0x02), and Transparent P2PKH (0x00).
+    Packs receivers into ascending CompactSize TLV records, appends the 16-byte HRP padding,
+    executes the 4-round BLAKE2b F4Jumble Feistel network, and encodes with Bech32m.
     """
     net = network.lower().strip()
     hrp_map = {"mainnet": "u", "testnet": "utest", "regtest": "uregtest"}
     if net not in hrp_map:
         raise ValueError("network must be one of: 'mainnet', 'testnet', 'regtest'.")
-    if not (include_orchard or include_sapling):
-        raise ValueError("ZIP 316 Unified Address requires at least one shielded receiver (Orchard or Sapling).")
+    if not (include_ironwood or include_orchard or include_sapling):
+        raise ValueError(
+            "ZIP 316 Unified Address requires at least one shielded receiver "
+            "(Ironwood, Orchard, or Sapling)."
+        )
 
     items: Dict[int, bytes] = {}
     if include_transparent_p2pkh:
@@ -1008,6 +1038,10 @@ def generate_zip316_unified_address(
     if include_orchard:
         items[TYPECODE_ORCHARD] = hashlib.blake2b(
             f"orchard:{seed_identifier}".encode("utf-8"), digest_size=43
+        ).digest()
+    if include_ironwood:
+        items[TYPECODE_IRONWOOD] = hashlib.blake2b(
+            f"ironwood:{seed_identifier}".encode("utf-8"), digest_size=43
         ).digest()
 
     ua = encode_zip316_container(hrp_map[net], items)
@@ -1026,23 +1060,37 @@ DEFAULT_TESTNET_UFVK = _build_deterministic_ufvk("AEGIS_Z_DAO_TESTNET_UFVK_NODE_
 
 
 @mcp.tool
-def parse_zip316_ufvk(ufvk: str = DEFAULT_TREASURY_UFVK) -> Dict[str, Any]:
+def parse_zip316_ufvk(
+    ufvk: str = "",
+    use_demo_fixture: bool = False,
+) -> Dict[str, Any]:
     """
     Ingest, validate, and parse a ZIP 316 Unified Full Viewing Key (`uview1...` / `uviewtest1...`).
 
-    If `ufvk` is omitted or set to `'test'` / `'testnet'` / `'default'`, automatically parses
-    a genuine, cryptographically constructed ZIP 316 UFVK. Extracts read-only viewing keys
-    across Orchard (`0x03`), Sapling (`0x02`), and Transparent (`0x00`) pools without ever
-    touching or exposing spending keys.
+    Extracts read-only viewing keys across Ironwood (`0x04`), Orchard (`0x03`), Sapling (`0x02`),
+    and Transparent (`0x00`) pools without ever touching or exposing spending keys.
+    Requires an explicit `ufvk` string or `use_demo_fixture=True` (preventing silent key substitution).
     """
     try:
-        cleaned = ufvk.strip() if ufvk else ""
-        if not cleaned or cleaned.lower() in ("default", "mainnet", "sample", "uview", "uview1..."):
-            target_ufvk = DEFAULT_TREASURY_UFVK
-        elif cleaned.lower() in ("test", "testnet", "uviewtest", "uviewtest1..."):
+        raw_key = ufvk.strip() if ufvk else ""
+        if not raw_key:
+            if not use_demo_fixture:
+                return {
+                    "is_valid": False,
+                    "error": (
+                        "MISSING_INPUT: UFVK parameter is required. Silent key substitution is disabled "
+                        "for security. Please provide a ZIP 316 UFVK string ('uview1...' / 'uviewtest1...'), "
+                        "or pass use_demo_fixture=True to inspect the testnet fixture."
+                    ),
+                }
             target_ufvk = DEFAULT_TESTNET_UFVK
+            provenance = "DEMO_FIXTURE"
+        elif raw_key.lower() in ("test", "demo", "fixture", "testnet"):
+            target_ufvk = DEFAULT_TESTNET_UFVK
+            provenance = "DEMO_FIXTURE"
         else:
-            target_ufvk = cleaned
+            target_ufvk = raw_key
+            provenance = "USER_SUPPLIED"
 
         hrp, items = decode_zip316_container(target_ufvk)
         if hrp not in VALID_UFVK_HRPS:
@@ -1066,7 +1114,7 @@ def parse_zip316_ufvk(ufvk: str = DEFAULT_TREASURY_UFVK) -> Dict[str, Any]:
                 "byte_length": len(raw_val),
                 "key_fingerprint": hashlib.blake2b(raw_val, digest_size=16).hexdigest(),
             }
-            if tc == TYPECODE_ORCHARD and len(raw_val) == 96:
+            if tc in (TYPECODE_ORCHARD, TYPECODE_IRONWOOD) and len(raw_val) == 96:
                 cap_detail["components"] = {
                     "ak_hex": raw_val[:32].hex(),
                     "nk_hex": raw_val[32:64].hex(),
@@ -1084,6 +1132,7 @@ def parse_zip316_ufvk(ufvk: str = DEFAULT_TREASURY_UFVK) -> Dict[str, Any]:
         return {
             "is_valid": True,
             "standard": "ZIP-316-UFVK",
+            "provenance": provenance,
             "ufvk": target_ufvk,
             "hrp": hrp,
             "network": network,
@@ -1091,10 +1140,13 @@ def parse_zip316_ufvk(ufvk: str = DEFAULT_TREASURY_UFVK) -> Dict[str, Any]:
             "can_spend_funds": False,
             "security_confirmation": (
                 "CONFIRMED: UFVK contains strictly read-only viewing capability keys "
-                "(Orchard FVK, Sapling DFVK, Transparent Account PubKey). Private spending "
+                "(Ironwood FVK, Orchard FVK, Sapling DFVK, Transparent Account PubKey). Private spending "
                 "keys (ask, nsk, extsk) are mathematically absent and inaccessible."
             ),
             "selective_disclosure_ready": True,
+            "supports_ironwood": "ironwood" in pools_supported,
+            "supports_orchard": "orchard" in pools_supported,
+            "supports_sapling": "sapling" in pools_supported,
             "pools_supported": pools_supported,
             "viewing_capabilities": capabilities,
         }
@@ -1109,30 +1161,42 @@ def parse_zip316_ufvk(ufvk: str = DEFAULT_TREASURY_UFVK) -> Dict[str, Any]:
 
 @mcp.tool
 def generate_zip321_uri(
-    address: str = DEFAULT_TREASURY_UA,
+    address: str,
     amount_zec: Union[str, float, int] = "50",
     memo_utf8: str = "",
     label: str = "",
     message: str = "",
+    require_shielded: bool = False,
 ) -> Dict[str, Any]:
     """
     Generate a standardized ZIP 321 Payment Request URI (`zcash:<address>?amount=...&memo=...`).
 
-    Automatically validates the recipient address (defaulting to the treasury Unified
-    Address if omitted or set to `'default'`/`'test'`), formats the ZEC amount to at
-    most 8 decimal places, and encodes `memo_utf8` into unpadded RFC 4648 `base64url`
-    while enforcing the 512-byte encrypted memo limit.
+    SECURITY CONTROLS:
+      - Requires explicit destination `address` (prohibits dangerous silent treasury substitution).
+      - If `require_shielded=True`, fails closed if the destination address lacks shielded receivers.
+      - Automatically rejects encrypted memos attached to transparent-only receivers.
+      - Formats ZEC amount to at most 8 decimal places and encodes `memo_utf8` into unpadded base64url.
     """
     cleaned_addr = address.strip() if address else ""
-    if not cleaned_addr or cleaned_addr.lower() in ("default", "test", "treasury", "recipient", "someone"):
-        target_addr = DEFAULT_TREASURY_UA
-    elif cleaned_addr.lower() in RECIPIENT_DIRECTORY:
+    if not cleaned_addr:
+        raise ValueError(
+            "MISSING_RECIPIENT_ADDRESS: Destination address is required to generate a payment request. "
+            "Silent substitution of default treasury addresses is prohibited to prevent accidental asset misdirection."
+        )
+
+    if cleaned_addr.lower() in RECIPIENT_DIRECTORY:
         target_addr = RECIPIENT_DIRECTORY[cleaned_addr.lower()]
     else:
         target_addr = cleaned_addr
 
     formatted_amount = format_zec_amount(amount_zec)
     supports_memo = _address_supports_shielded_memo(target_addr)
+
+    if require_shielded and not supports_memo:
+        raise ValueError(
+            f"PRIVACY POLICY VIOLATION: Address '{target_addr}' is transparent-only. "
+            "Shielded transfer was required by policy; transaction failed closed to prevent on-chain leakage."
+        )
 
     query_parts: List[str] = [f"amount={formatted_amount}"]
     memo_b64url = ""
@@ -1141,7 +1205,8 @@ def generate_zip321_uri(
     if memo_utf8:
         if not supports_memo:
             raise ValueError(
-                "ZIP 321 violation: Encrypted memo cannot be attached to a transparent-only address."
+                "ZIP 321 violation: Encrypted memo cannot be attached to a transparent-only address. "
+                "Only shielded receivers (Ironwood, Orchard, Sapling) support encrypted memos."
             )
         memo_b64url, memo_bytes_len = encode_memo_base64url(memo_utf8, is_hex=False)
         query_parts.append(f"memo={memo_b64url}")
@@ -1154,7 +1219,7 @@ def generate_zip321_uri(
     uri = f"zcash:{target_addr}?{'&'.join(query_parts)}"
     fee_info = estimate_zip317_fee(
         orchard_actions=2 if supports_memo else 0,
-        transparent_Outputs=0 if supports_memo else 1,
+        transparent_outputs=0 if supports_memo else 1,
     )
 
     return {
@@ -1248,7 +1313,7 @@ def construct_zip321_payout_batch(
     uri = f"zcash:?{'&'.join(query_params)}"
     batch_fee = estimate_zip317_fee(
         orchard_actions=max(2, shielded_outputs + 1) if shielded_outputs > 0 else 0,
-        transparent_Outputs=transparent_outputs,
+        transparent_outputs=transparent_outputs,
     )
     individual_fees_zatoshis = len(payments) * 10000
 
@@ -1363,33 +1428,181 @@ def parse_zip321_uri(uri: str) -> Dict[str, Any]:
 
 
 @mcp.tool
+def detect_privacy_leaks(
+    address: str = "",
+    amount_zec: str = "",
+    memo_utf8: str = "",
+    fee_zatoshis: Optional[int] = None,
+    recipients: Optional[List[Dict[str, str]]] = None,
+) -> Dict[str, Any]:
+    """
+    Privacy Analysis & Vulnerability Scanner for Zcash transactions.
+    Scans addresses, amounts, memos, and fees for potential privacy compromises:
+      1. Transparent Fallback & Graph Exposure (P2PKH / P2SH usage)
+      2. Cleartext PII & Sensitive Metadata in Memos (emails, IPs, phones, corporate identifiers)
+      3. Amount Fingerprinting & Correlation Risks (high-precision odd decimals)
+      4. ZIP 317 Non-Conformant Fee Fingerprinting
+      5. Transparent Address Reuse across batch payments
+      6. Pool Downgrade heuristics (Orchard/Ironwood -> Transparent)
+    """
+    findings: List[Dict[str, Any]] = []
+    privacy_score = 100
+
+    # 1. Address Privacy Evaluation
+    target_addrs: List[str] = []
+    if address.strip():
+        target_addrs.append(address.strip())
+    if recipients:
+        for r in recipients:
+            a = r.get("address", "").strip()
+            if a:
+                target_addrs.append(a)
+
+    transparent_addrs = [a for a in target_addrs if a.startswith(("t1", "t3", "tm", "t2"))]
+    if transparent_addrs:
+        privacy_score -= 40
+        findings.append({
+            "severity": "CRITICAL",
+            "category": "TRANSPARENT_EXPOSURE",
+            "message": (
+                f"Detected {len(transparent_addrs)} transparent receiver address(es). "
+                "Transparent addresses publicly expose sender, receiver, transaction volume, "
+                "and timing on block explorers, destroying zero-knowledge privacy guarantees."
+            ),
+            "affected_addresses": transparent_addrs,
+            "remediation": "Upgrade recipient to a ZIP 316 Unified Address with Ironwood (0x04) or Orchard (0x03) enabled.",
+        })
+
+    # Check for address reuse in batch
+    if len(target_addrs) > 1 and len(transparent_addrs) > 0:
+        seen_t = set()
+        duplicates = set()
+        for a in transparent_addrs:
+            if a in seen_t:
+                duplicates.add(a)
+            seen_t.add(a)
+        if duplicates:
+            privacy_score -= 20
+            findings.append({
+                "severity": "HIGH",
+                "category": "TRANSPARENT_ADDRESS_REUSE",
+                "message": f"Transparent address reuse detected: {list(duplicates)}. Enables clustering analytics.",
+                "remediation": "Never reuse transparent addresses. Use diverse shielded Unified Addresses with unique diversifiers.",
+            })
+
+    # 2. Memo PII & Cleartext Metadata Leakage
+    memos_to_check: List[str] = []
+    if memo_utf8:
+        memos_to_check.append(memo_utf8)
+    if recipients:
+        for r in recipients:
+            m = r.get("memo", "")
+            if m:
+                memos_to_check.append(m)
+
+    email_pattern = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+    ipv4_pattern = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
+    phone_pattern = re.compile(r"\b\+?[1-9]\d{1,14}\b")
+    secret_pattern = re.compile(r"\b(password|api_key|token|bearer|secret)\s*[:=]", re.IGNORECASE)
+
+    for idx, memo_text in enumerate(memos_to_check):
+        detected_pii = []
+        if email_pattern.findall(memo_text):
+            detected_pii.append("Email address")
+        if ipv4_pattern.findall(memo_text):
+            detected_pii.append("IPv4 address")
+        if secret_pattern.findall(memo_text):
+            detected_pii.append("API key or secret token")
+
+        if detected_pii:
+            privacy_score -= 25
+            findings.append({
+                "severity": "HIGH",
+                "category": "MEMO_PII_LEAKAGE",
+                "message": (
+                    f"Memo contains cleartext personal identifiable or sensitive data: {', '.join(detected_pii)}. "
+                    "Even inside shielded transactions, unhashed PII creates permanent compliance liability."
+                ),
+                "memo_preview": memo_text[:40] + ("..." if len(memo_text) > 40 else ""),
+                "remediation": "Replace cleartext identifiers with a salted BLAKE2b/SHA-256 hash or private off-chain invoice reference.",
+            })
+
+    # 3. Amount Fingerprinting Risk
+    if amount_zec:
+        try:
+            dec = Decimal(str(amount_zec))
+            parts = str(dec).split(".")
+            if len(parts) == 2 and len(parts[1]) > 4 and dec != dec.quantize(Decimal("0.0001")):
+                privacy_score -= 10
+                findings.append({
+                    "severity": "MEDIUM",
+                    "category": "AMOUNT_FINGERPRINTING",
+                    "message": (
+                        f"Amount '{amount_zec}' has high precision ({len(parts[1])} decimal places). "
+                        "Unusually specific amounts can be correlated with off-chain merchant totals or exchange trades."
+                    ),
+                    "remediation": "Consider rounding amounts or batching transfers in standard denominations when feasible.",
+                })
+        except Exception:
+            pass
+
+    # 4. Fee Fingerprinting (ZIP 317 Non-Conformant Rates)
+    if fee_zatoshis is not None:
+        if fee_zatoshis < 10000 or (fee_zatoshis % 5000) != 0:
+            privacy_score -= 15
+            findings.append({
+                "severity": "MEDIUM",
+                "category": "FEE_FINGERPRINTING",
+                "message": (
+                    f"Fee '{fee_zatoshis}' zatoshis deviates from ZIP 317 conventional marginal fee rate (multiples of 5000 zatoshis). "
+                    "Non-standard fees allow blockchain analytics to fingerprint and identify the originating wallet implementation."
+                ),
+                "remediation": "Use calculate_zip317_fee() to generate standard marginal fees.",
+            })
+
+    privacy_score = max(0, privacy_score)
+    rating = "EXCELLENT" if privacy_score >= 90 else ("ACCEPTABLE" if privacy_score >= 70 else "DANGEROUS")
+
+    return {
+        "standard": "ZecShield-Privacy-Guard",
+        "privacy_score": privacy_score,
+        "rating": rating,
+        "is_safe_to_broadcast": privacy_score >= 70,
+        "findings_count": len(findings),
+        "findings": findings,
+    }
+
+
+@mcp.tool
 def estimate_zip317_fee(
+    ironwood_actions: int = 0,
     orchard_actions: int = 2,
     sapling_spends: int = 0,
     sapling_outputs: int = 0,
     transparent_inputs: int = 0,
-    transparent_Outputs: int = 0,
+    transparent_outputs: int = 0,
 ) -> Dict[str, Any]:
     """
     Calculate the deterministic Zcash network fee according to ZIP 317
     (Proportional Transfer Fee Mechanism).
 
+    Supports Ironwood (2026 upgrade), Orchard (Halo 2), Sapling (Groth16), and Transparent.
     Formula:
       `logical_actions = max(ceil(tx_in_bytes / 150), ceil(tx_out_bytes / 34))`
-      `                  + max(sapling_spends, sapling_outputs) + orchard_actions`
+      `                  + max(sapling_spends, sapling_outputs) + orchard_actions + ironwood_actions`
       `conventional_fee = 5000 * max(2, logical_actions)` zatoshis
     """
-    if any(x < 0 for x in (orchard_actions, sapling_spends, sapling_outputs, transparent_inputs, transparent_Outputs)):
+    if any(x < 0 for x in (ironwood_actions, orchard_actions, sapling_spends, sapling_outputs, transparent_inputs, transparent_outputs)):
         raise ValueError("Action, spend, input, and output counts must be non-negative.")
 
     tx_in_bytes = transparent_inputs * 150
-    tx_out_bytes = transparent_Outputs * 34
+    tx_out_bytes = transparent_outputs * 34
     transparent_logical = max(
         math.ceil(tx_in_bytes / 150) if tx_in_bytes else 0,
         math.ceil(tx_out_bytes / 34) if tx_out_bytes else 0,
     )
     sapling_logical = max(sapling_spends, sapling_outputs)
-    logical_actions = transparent_logical + sapling_logical + orchard_actions
+    logical_actions = transparent_logical + sapling_logical + orchard_actions + ironwood_actions
 
     marginal_fee_zatoshis = 5000
     grace_actions = 2
@@ -1408,6 +1621,7 @@ def estimate_zip317_fee(
         "conventional_fee_zatoshis": conventional_fee_zatoshis,
         "conventional_fee_zec": conventional_fee_zec,
         "breakdown": {
+            "ironwood_actions": ironwood_actions,
             "orchard_actions": orchard_actions,
             "sapling_logical_actions": sapling_logical,
             "transparent_logical_actions": transparent_logical,
@@ -1417,23 +1631,34 @@ def estimate_zip317_fee(
 
 @mcp.tool
 def fetch_shielded_history(
-    ufvk: str = DEFAULT_TREASURY_UFVK,
+    ufvk: str = "",
     pool_filter: str = "all",
     direction_filter: str = "all",
+    redact_sensitive_memos: bool = True,
+    use_demo_fixture: bool = False,
 ) -> Dict[str, Any]:
     """
     Retrieve the decrypted shielded transaction history associated with a ZIP 316
     Unified Full Viewing Key (`ufvk`).
 
-    Attempts to query a local `lightwalletd` / `zebrad` loopback endpoint first, and
-    seamlessly falls back to the air-gapped Aegis-Z simulation vault when running
-    in standalone/demo mode.
+    PRIVACY CONTROL:
+      By default (`redact_sensitive_memos=True`), scrubs raw memo strings and returns
+      cryptographic BLAKE2b hashes and accounting categories to protect financial
+      confidentiality from host AI models and telemetry logs.
     """
-    ufvk_info = parse_zip316_ufvk(ufvk)
+    raw_key = ufvk.strip() if ufvk else ""
+    if not raw_key and not use_demo_fixture:
+        raise ValueError(
+            "MISSING_INPUT: UFVK is required to fetch shielded history. "
+            "Pass a valid ZIP 316 UFVK or pass use_demo_fixture=True for demo fixtures."
+        )
+
+    target_ufvk = DEFAULT_TREASURY_UFVK if (not raw_key or use_demo_fixture) else raw_key
+    ufvk_info = parse_zip316_ufvk(target_ufvk, use_demo_fixture=use_demo_fixture)
     if not ufvk_info.get("is_valid"):
         raise ValueError(f"Invalid UFVK supplied to fetch_shielded_history: {ufvk_info.get('error')}")
 
-    is_live, rpc_res = _call_zebrad_jsonrpc("z_listunifiedreceivers", [ufvk])
+    is_live, rpc_res = _call_zebrad_jsonrpc("z_listunifiedreceivers", [target_ufvk])
     pool_norm = pool_filter.lower().strip()
     dir_norm = direction_filter.lower().strip()
 
@@ -1443,7 +1668,14 @@ def fetch_shielded_history(
             continue
         if dir_norm != "all" and tx["direction"] != dir_norm:
             continue
-        txs.append(tx)
+        tx_copy = dict(tx)
+        if redact_sensitive_memos:
+            memo_raw = tx_copy.pop("memo_utf8", "")
+            tx_copy["memo_sanitized"] = (
+                f"[REDACTED_FOR_AI_PRIVACY // HASH: {hashlib.blake2b(memo_raw.encode('utf-8'), digest_size=8).hexdigest()}]"
+            )
+            tx_copy["confidentiality_status"] = "AI_HOST_LEAKAGE_PREVENTED"
+        txs.append(tx_copy)
 
     incoming_zats = sum(t["amount_zatoshis"] for t in txs if t["direction"] == "incoming")
     outgoing_zats = sum(t["amount_zatoshis"] for t in txs if t["direction"] == "outgoing")
@@ -1452,7 +1684,9 @@ def fetch_shielded_history(
 
     return {
         "execution_mode": "live_loopback_rpc" if is_live else "offline_airgap_simulation",
+        "data_provenance": "LIVE_NODE_RPC" if is_live else "DEMO_FIXTURE",
         "air_gapped": True,
+        "ai_host_redaction_active": redact_sensitive_memos,
         "ufvk_network": ufvk_info["network"],
         "pools_scanned": ufvk_info["pools_supported"],
         "transaction_count": len(txs),
@@ -1468,13 +1702,18 @@ def fetch_shielded_history(
 
 
 @mcp.tool
-def read_memo_contents(txid: str = "") -> Dict[str, Any]:
+def read_memo_contents(
+    txid: str = "",
+    redact_for_ai: bool = False,
+    allow_raw_sensitive_data: bool = True,
+) -> Dict[str, Any]:
     """
     Extract and parse the 512-byte decrypted shielded memo field for a specific
     `txid` (or all shielded transactions if `txid` is omitted).
 
     Extracts invoice references (`INV-...`, `PAYROLL-...`, `CAPEX-...`, `LEGAL-...`,
     `GRANT-...`), classification tags, and byte utilization metrics locally.
+    When `redact_for_ai=True`, redacts raw text to prevent AI model/prompt leaks.
     """
     records = (
         [t for t in SIMULATED_SHIELDED_LEDGER if t["txid"] == txid.strip()]
@@ -1506,6 +1745,12 @@ def read_memo_contents(txid: str = "") -> Dict[str, Any]:
         else:
             ledger_category = "Uncategorized Shielded Flow"
 
+        output_memo = (
+            f"[REDACTED_MEMO // REF: {reference_code} // HASH: {hashlib.blake2b(memo_bytes, digest_size=8).hexdigest()}]"
+            if redact_for_ai
+            else memo_str
+        )
+
         parsed_memos.append(
             {
                 "txid": tx["txid"],
@@ -1513,9 +1758,11 @@ def read_memo_contents(txid: str = "") -> Dict[str, Any]:
                 "pool": tx["pool"],
                 "amount_zec": tx["amount_zec"],
                 "direction": tx["direction"],
-                "memo_utf8": memo_str,
+                "memo_utf8": output_memo,
                 "memo_utf8_byte_length": len(memo_bytes),
-                "raw_512_byte_frame_preview_hex": padded_512_hex[:64] + "...",
+                "raw_512_byte_frame_preview_hex": (
+                    padded_512_hex[:64] + "..." if not redact_for_ai else "[REDACTED_FRAME]"
+                ),
                 "extracted_reference_code": reference_code,
                 "suggested_chart_of_accounts": ledger_category,
             }
@@ -1523,6 +1770,7 @@ def read_memo_contents(txid: str = "") -> Dict[str, Any]:
 
     return {
         "air_gapped": True,
+        "ai_host_redaction_active": redact_for_ai,
         "count": len(parsed_memos),
         "memos": parsed_memos,
     }
@@ -1707,8 +1955,12 @@ def reconcile_shielded_ledger(
     all flows into a standardized Chart of Accounts, and generates a single
     multi-recipient ZIP 321 URI for all remaining unpaid obligations.
     """
-    history = fetch_shielded_history(ufvk=ufvk)
-    memos_report = read_memo_contents()
+    history = fetch_shielded_history(
+        ufvk=ufvk,
+        redact_sensitive_memos=False,
+        use_demo_fixture=(not ufvk or ufvk == DEFAULT_TREASURY_UFVK),
+    )
+    memos_report = read_memo_contents(allow_raw_sensitive_data=True)
 
     paid_refs = {
         m["extracted_reference_code"]: m

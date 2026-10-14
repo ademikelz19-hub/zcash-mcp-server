@@ -145,7 +145,26 @@ async def run_all_three_tests() -> None:
             },
         )
 
+        # -------------------------------------------------------------------
+        # TEST 5: Privacy Leak Detection & Vulnerability Analysis
+        # -------------------------------------------------------------------
+        leak_check_raw = await client.call_tool(
+            "detect_privacy_leaks",
+            {
+                "address": generated_ua,
+                "amount_zec": "50",
+                "memo_utf8": "Hackathon test payment",
+            },
+        )
+        leak_check = _extract_json(leak_check_raw)
+
+        print_section(
+            "TEST 5 // ZECSHIELD PRIVACY LEAK DETECTION & AUDIT",
+            leak_check,
+        )
+
 
 if __name__ == "__main__":
     asyncio.run(run_all_three_tests())
+
 

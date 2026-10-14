@@ -21,6 +21,7 @@ from server import (
     DEFAULT_TREASURY_UA,
     DEFAULT_TREASURY_UFVK,
     RECIPIENT_DIRECTORY,
+    TYPECODE_IRONWOOD,
     TYPECODE_ORCHARD,
     TYPECODE_P2PKH,
     TYPECODE_P2SH,
@@ -30,6 +31,7 @@ from server import (
     bech32m_encode,
     construct_zip321_payout_batch,
     decode_memo_base64url,
+    detect_privacy_leaks,
     encode_memo_base64url,
     encode_zip316_container,
     estimate_zip317_fee,
@@ -320,6 +322,7 @@ def test_user_prompt_3_generate_50_zec_uri() -> None:
     'Hackathon test payment' and verify the final URI string.
     """
     res = generate_zip321_uri(
+        address=DEFAULT_TREASURY_UA,
         amount_zec="50",
         memo_utf8="Hackathon test payment",
     )
@@ -350,6 +353,7 @@ async def test_fastmcp_client_protocol_execution() -> None:
         assert "validate_zip316_unified_address" in tool_names
         assert "parse_zip316_ufvk" in tool_names
         assert "generate_zip321_uri" in tool_names
+        assert "detect_privacy_leaks" in tool_names
 
         # Test 1 over MCP protocol
         t1_gen = await client.call_tool("generate_zip316_unified_address", {
@@ -367,19 +371,119 @@ async def test_fastmcp_client_protocol_execution() -> None:
 
         # Test 3 over MCP protocol
         t3_uri = await client.call_tool("generate_zip321_uri", {
+            "address": DEFAULT_TREASURY_UA,
             "amount_zec": "50",
             "memo_utf8": "Hackathon test payment",
         })
         assert not t3_uri.is_error
 
+        # Test 5 over MCP protocol: Privacy leak detection
+        t5_leak = await client.call_tool("detect_privacy_leaks", {
+            "address": DEFAULT_TREASURY_UA,
+            "amount_zec": "50",
+            "memo_utf8": "Clean shielded transfer",
+        })
+        assert not t5_leak.is_error
+
 
 def test_render_zip321_iso18004_qr() -> None:
     """Verify real ISO/IEC 18004 Reed-Solomon QR generation for a 50 ZEC ZIP 321 URI."""
-    uri_res = generate_zip321_uri(amount_zec="50", memo_utf8="Hackathon test payment")
+    uri_res = generate_zip321_uri(
+        address=DEFAULT_TREASURY_UA,
+        amount_zec="50",
+        memo_utf8="Hackathon test payment",
+    )
     qr_res = render_zip321_qr(uri_res["uri"])
     assert qr_res["qr_code"]["scannable_by_zashi_ywallet"] is True
     assert qr_res["qr_code"]["standard"].startswith("ISO/IEC 18004")
     assert len(qr_res["matrix"]) >= 21
     assert qr_res["qr_code"]["svg_data_uri"].startswith("data:image/svg+xml;base64,")
+
+
+def test_fail_closed_missing_address_in_zip321() -> None:
+    """Verify generate_zip321_uri fails closed when address is empty or omitted."""
+    with pytest.raises(ValueError, match="MISSING_RECIPIENT_ADDRESS"):
+        generate_zip321_uri(address="", amount_zec="50")
+
+
+def test_fail_closed_missing_ufvk_without_explicit_fixture() -> None:
+    """Verify parse_zip316_ufvk refuses to silently substitute fixtures without authorization."""
+    res = parse_zip316_ufvk("")
+    assert res["is_valid"] is False
+    assert "MISSING_INPUT" in res["error"]
+
+    # Passing explicit fixture flag must succeed and declare DEMO_FIXTURE provenance
+    fixture_res = parse_zip316_ufvk("", use_demo_fixture=True)
+    assert fixture_res["is_valid"] is True
+    assert fixture_res["provenance"] == "DEMO_FIXTURE"
+
+
+def test_ironwood_pool_support_and_priority_selection() -> None:
+    """Verify Ironwood (0x04) support, ascending TLV packing, and top priority in fallback hierarchy."""
+    res = generate_zip316_unified_address(
+        seed_identifier="IRONWOOD_VALIDATION_VECTOR_2026",
+        network="mainnet",
+        include_ironwood=True,
+        include_orchard=True,
+        include_sapling=True,
+        include_transparent_p2pkh=True,
+    )
+    ua = res["unified_address"]
+    val = validate_zip316_unified_address(ua)
+    assert val["is_valid"] is True
+
+    # Confirm Ironwood is present in bundled receivers
+    pools = [r["pool"] for r in val["receivers"]]
+    assert pools == ["p2pkh", "sapling", "orchard", "ironwood"]
+
+    # Confirm Ironwood takes top precedence in fallback chain
+    assert val["selected_priority_receiver"]["pool"] == "ironwood"
+    assert val["selected_priority_receiver"]["typecode_hex"] == "0x04"
+    assert val["fallback_order_summary"].startswith("IRONWOOD (0x04)")
+
+
+def test_zecshield_privacy_leak_detector() -> None:
+    """Verify detect_privacy_leaks flags transparent leaks, PII in memos, and fee fingerprinting."""
+    # 1. Clean transaction
+    clean = detect_privacy_leaks(
+        address=DEFAULT_TREASURY_UA,
+        amount_zec="50.0",
+        memo_utf8="Shielded DAO contributor compensation",
+        fee_zatoshis=10000,
+    )
+    assert clean["is_safe_to_broadcast"] is True
+    assert clean["privacy_score"] == 100
+    assert clean["findings_count"] == 0
+
+    # 2. Leaky transaction (Transparent address + PII in memo + non-standard fee)
+    leaky = detect_privacy_leaks(
+        address="t1VpYecBW4UudbGcy4ufh61eWxQCoFaUrPs",
+        amount_zec="1.23456789",
+        memo_utf8="Send invoice to alice@cypherpunk.org at IP 192.168.1.1",
+        fee_zatoshis=77700,
+    )
+    assert leaky["is_safe_to_broadcast"] is False
+    assert leaky["privacy_score"] < 50
+    categories = [f["category"] for f in leaky["findings"]]
+    assert "TRANSPARENT_EXPOSURE" in categories
+    assert "MEMO_PII_LEAKAGE" in categories
+    assert "FEE_FINGERPRINTING" in categories
+    assert "AMOUNT_FINGERPRINTING" in categories
+
+
+def test_ai_memo_redaction_for_host_safety() -> None:
+    """Verify fetch_shielded_history and read_memo_contents protect sensitive memos from host LLM leaks."""
+    history = fetch_shielded_history(DEFAULT_TREASURY_UFVK, redact_sensitive_memos=True)
+    assert history["ai_host_redaction_active"] is True
+    for tx in history["transactions"]:
+        assert tx["memo_sanitized"].startswith("[REDACTED_FOR_AI_PRIVACY")
+
+    memos = read_memo_contents(redact_for_ai=True)
+    assert memos["ai_host_redaction_active"] is True
+    for m in memos["memos"]:
+        assert m["memo_utf8"].startswith("[REDACTED_MEMO")
+
+
+
 
 
