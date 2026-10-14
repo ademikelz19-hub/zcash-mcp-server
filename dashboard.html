@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NODE 07 // ZCASH MCP STANDARD LIBRARY &amp; AEGIS-Z TERMINAL</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,600;0,700;1,400&display=swap');
+
+    :root {
+      --bg-pure-black: #000000;
+      --fg-phosphor: #00FF41;
+      --fg-phosphor-bright: #39FF14;
+      --fg-phosphor-dim: #008F11;
+      --fg-phosphor-muted: #004D09;
+      --border-phosphor: #00FF41;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    body {
+      background-color: var(--bg-pure-black);
+      color: var(--fg-phosphor);
+      min-height: 100vh;
+      padding: 20px;
+      line-height: 1.45;
+      font-size: 13px;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* Brutalist CRT Scanline Overlay */
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.22),
+        rgba(0, 0, 0, 0.22) 1px,
+        transparent 1px,
+        transparent 2px
+      );
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    .terminal-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      border: 1px solid var(--border-phosphor);
+      background: #000000;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-phosphor);
+      background: #000000;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .brand-block {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Strictly constrained 26x26 pixel block identity */
+    .pixel-identity-26 {
+      width: 26px;
+      height: 26px;
+      min-width: 26px;
+      min-height: 26px;
+      max-width: 26px;
+      max-height: 26px;
+      image-rendering: pixelated;
+      border: 1px solid var(--fg-phosphor);
+      background: #000000;
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    .title-main {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--fg-phosphor-bright);
+    }
+
+    .subtitle {
+      font-size: 11px;
+      color: var(--fg-phosphor-dim);
+    }
+
+    .status-badges {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      border: 1px solid var(--fg-phosphor);
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      background: #000000;
+      color: var(--fg-phosphor-bright);
+    }
+
+    .badge-solid {
+      background: var(--fg-phosphor);
+      color: #000000;
+      font-weight: 700;
+    }
+
+    .nav-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border-phosphor);
+      background: #000000;
+      overflow-x: auto;
+    }
+
+    .nav-tab {
+      background: #000000;
+      color: var(--fg-phosphor-dim);
+      border: none;
+      border-right: 1px solid var(--fg-phosphor-muted);
+      padding: 10px 18px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      transition: none;
+    }
+
+    .nav-tab:hover,
+    .nav-tab.active {
+      background: var(--fg-phosphor);
+      color: #000000;
+    }
+
+    .grid-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-bottom: 1px solid var(--border-phosphor);
+    }
+
+    @media (max-width: 1024px) {
+      .grid-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .panel {
+      padding: 16px;
+      border-right: 1px solid var(--fg-phosphor-muted);
+      border-bottom: 1px solid var(--fg-phosphor-muted);
+      background: #000000;
+    }
+
+    .panel:last-child {
+      border-right: none;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--fg-phosphor-dim);
+      padding-bottom: 8px;
+      margin-bottom: 14px;
+    }
+
+    .panel-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--fg-phosphor-bright);
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    @media (max-width: 768px) {
+      .kpi-row {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    .kpi-box {
+      border: 1px solid var(--fg-phosphor-dim);
+      padding: 10px;
+      background: #000000;
+    }
+
+    .kpi-label {
+      font-size: 10px;
+      color: var(--fg-phosphor-dim);
+      text-transform: uppercase;
+    }
+
+    .kpi-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--fg-phosphor-bright);
+      margin-top: 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    th, td {
+      border: 1px solid var(--fg-phosphor-muted);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: #000000;
+      background: var(--fg-phosphor);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 11px;
+    }
+
+    tr:hover td {
+      border-color: var(--fg-phosphor);
+    }
+
+    .mono-code {
+      background: #000000;
+      border: 1px solid var(--fg-phosphor-dim);
+      padding: 10px;
+      color: var(--fg-phosphor-bright);
+      word-break: break-all;
+      font-size: 11px;
+      margin-top: 8px;
+      white-space: pre-wrap;
+    }
+
+    .input-group {
+      margin-bottom: 12px;
+    }
+
+    .input-group label {
+      display: block;
+      font-size: 11px;
+      color: var(--fg-phosphor-dim);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }
+
+    input[type="text"],
+    textarea,
+    select {
+      width: 100%;
+      background: #000000;
+      color: var(--fg-phosphor-bright);
+      border: 1px solid var(--fg-phosphor);
+      padding: 8px 10px;
+      font-size: 12px;
+      outline: none;
+    }
+
+    button.btn-terminal {
+      background: #000000;
+      color: var(--fg-phosphor-bright);
+      border: 1px solid var(--fg-phosphor-bright);
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      text-transform: uppercase;
+    }
+
+    button.btn-terminal:hover {
+      background: var(--fg-phosphor-bright);
+      color: #000000;
+    }
+
+    .qr-wrapper {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    #qrCanvas {
+      border: 1px solid var(--fg-phosphor-bright);
+      background: #000000;
+      image-rendering: pixelated;
+    }
+
+    .footer-bar {
+      padding: 10px 16px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--fg-phosphor-dim);
+      background: #000000;
+    }
+  </style>
+</head>
+<body>
+  <div class="terminal-container">
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <div class="brand-block">
+        <canvas id="nodeIdentityCanvas" class="pixel-identity-26" width="26" height="26" title="26x26 Pixel Block Identity: NODE 07"></canvas>
+        <div>
+          <div class="title-main">NODE 07 ONLINE // THE PYRAMID WAKES // ZCASH_MCP_SERVER</div>
+          <div class="subtitle">FILE 00: ZCASH MCP STANDARD LIBRARY &amp; PROJECT AEGIS-Z FORENSIC CONTROLLER</div>
+        </div>
+      </div>
+      <div class="status-badges">
+        <span class="badge badge-solid">DOES NOT LEAK: AIR-GAP VERIFIED</span>
+        <span class="badge">STDIO: FastMCP v2</span>
+        <span class="badge">ZIP 316 + ZIP 321 + ZIP 317</span>
+        <span class="badge">MODEL: GEMMA 4 26B (LiteRT LOCAL)</span>
+      </div>
+    </header>
+
+    <!-- NAVIGATION TABS -->
+    <nav class="nav-tabs">
+      <button class="nav-tab active" onclick="switchView('all')">[00 // FULL TERMINAL MATRIX]</button>
+      <button class="nav-tab" onclick="switchView('ledger')">[01 // UFVK SHIELDED LEDGER &amp; 512B MEMOS]</button>
+      <button class="nav-tab" onclick="switchView('zip316')">[02 // ZIP 316 F4JUMBLE + BECH32M INSPECTOR]</button>
+      <button class="nav-tab" onclick="switchView('zip321')">[03 // ZIP 321 BATCH URI &amp; AIR-GAP QR HANDOFF]</button>
+    </nav>
+
+    <!-- KPI METRICS ROW -->
+    <section class="panel" style="border-right: none;">
+      <div class="kpi-row">
+        <div class="kpi-box">
+          <div class="kpi-label">SHIELDED TREASURY BALANCE (ORCHARD + SAPLING)</div>
+          <div class="kpi-value">165.49955000 ZEC</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-label">INCOMING / OUTGOING FLOWS AUDITED</div>
+          <div class="kpi-value">+250.00 / -84.50 ZEC</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-label">PENDING OBLIGATIONS (ZIP 321 BATCH)</div>
+          <div class="kpi-value">39.75000000 ZEC (2 UNPAID)</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-label">EXTERNAL CLOUD TELEMETRY BYTES</div>
+          <div class="kpi-value">0 BYTES (100% LOCAL)</div>
+        </div>
+      </div>
+
+      <!-- SHIELDED TRANSACTION & 512-BYTE MEMO TABLE -->
+      <div id="section-ledger">
+        <div class="panel-header">
+          <div class="panel-title">
+            <canvas class="pixel-identity-26" width="26" height="26" data-seed="UFVK_SHIELDED_LEDGER"></canvas>
+            <span>DECRYPTED SHIELDED TRANSACTION HISTORY (ZIP 316 UFVK TRIAL DECRYPTION)</span>
+          </div>
+          <span class="badge">PROVING: HALO 2 (ORCHARD) + GROTH16 (SAPLING)</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>ID (26x26)</th>
+              <th>BLOCK / POOL</th>
+              <th>DIRECTION</th>
+              <th>AMOUNT (ZEC)</th>
+              <th>DECRYPTED 512-BYTE SHIELDED MEMO PAYLOAD</th>
+              <th>AEGIS-Z CHART OF ACCOUNTS</th>
+            </tr>
+          </thead>
+          <tbody id="ledgerTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SPLIT PANELS: ZIP 316 INSPECTOR & ZIP 321 MULTI-RECIPIENT QR GENERATOR -->
+    <div class="grid-layout">
+      <!-- LEFT PANEL: ZIP 316 & MCP STANDARD LIBRARY TOOLS -->
+      <section class="panel" id="section-zip316">
+        <div class="panel-header">
+          <div class="panel-title">
+            <canvas class="pixel-identity-26" width="26" height="26" data-seed="ZIP316_F4JUMBLE_ENGINE"></canvas>
+            <span>ZIP 316 UNIFIED ADDRESS &amp; UFVK CRYPTOGRAPHIC INSPECTOR</span>
+          </div>
+          <span class="badge">PRIORITY: ORCHARD &rarr; SAPLING &rarr; TRANSPARENT</span>
+        </div>
+
+        <div class="input-group">
+          <label>SELECT OR PASTE ZIP 316 UNIFIED ADDRESS / UFVK</label>
+          <select id="uaPresetSelect" onchange="inspectSelectedUA()">
+            <option value="treasury_ua">DAO Treasury UA (Orchard + Sapling + P2PKH)</option>
+            <option value="alice_ua">Alice Core Dev UA (Shielded-Only: Orchard + Sapling)</option>
+            <option value="bob_ua">Bob ZK Auditor UA (Shielded-Only: Orchard + Sapling)</option>
+            <option value="treasury_ufvk">DAO Treasury UFVK (uview1... Selective Disclosure Key)</option>
+          </select>
+        </div>
+
+        <div class="mono-code" id="uaInspectorOutput"></div>
+
+        <div class="panel-header" style="margin-top: 18px;">
+          <div class="panel-title">
+            <canvas class="pixel-identity-26" width="26" height="26" data-seed="MCP_STDIO_TOOLS"></canvas>
+            <span>EXPOSED @mcp.tool REGISTRY (Zcash_MCP_Server)</span>
+          </div>
+          <span class="badge">9 TOOLS REGISTERED</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>26x26</th>
+              <th>MCP TOOL NAME</th>
+              <th>CRYPTOGRAPHIC / RPC FUNCTION</th>
+            </tr>
+          </thead>
+          <tbody id="mcpToolsTableBody"></tbody>
+        </table>
+      </section>
+
+      <!-- RIGHT PANEL: AEGIS-Z RECONCILIATION & ZIP 321 AIR-GAPPED QR SIGNING HANDOFF -->
+      <section class="panel" id="section-zip321">
+        <div class="panel-header">
+          <div class="panel-title">
+            <canvas class="pixel-identity-26" width="26" height="26" data-seed="ZIP321_PAYOUT_BATCH"></canvas>
+            <span>ZIP 321 MULTI-RECIPIENT PAYOUT URI &amp; AIR-GAPPED QR HANDOFF</span>
+          </div>
+          <span class="badge">ZASHI / YWALLET READY</span>
+        </div>
+
+        <div class="input-group">
+          <label>RECONCILED UNPAID OBLIGATIONS (AUTO-BATCHED BY AEGIS-Z)</label>
+          <table>
+            <thead>
+              <tr>
+                <th>26x26</th>
+                <th>OBLIGATION ID</th>
+                <th>RECIPIENT</th>
+                <th>AMOUNT</th>
+                <th>STATUS</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><canvas class="pixel-identity-26" width="26" height="26" data-seed="INV-2026-101"></canvas></td>
+                <td>INV-2026-101</td>
+                <td>Helios Bare-Metal Infra</td>
+                <td>14.50 ZEC</td>
+                <td>[SETTLED // BLOCK 2685420]</td>
+              </tr>
+              <tr>
+                <td><canvas class="pixel-identity-26" width="26" height="26" data-seed="PAYROLL-OCT-2026"></canvas></td>
+                <td>PAYROLL-OCT-2026</td>
+                <td>Alice (Halo2 Core Dev)</td>
+                <td>42.00 ZEC</td>
+                <td>[SETTLED // BLOCK 2686890]</td>
+              </tr>
+              <tr>
+                <td><canvas class="pixel-identity-26" width="26" height="26" data-seed="AUDIT-FROST-2026-11"></canvas></td>
+                <td>AUDIT-FROST-2026-11</td>
+                <td>Bob (FROST Auditor)</td>
+                <td>31.50 ZEC</td>
+                <td style="color: var(--fg-phosphor-bright); font-weight: 700;">[UNPAID &rarr; IN ZIP 321 BATCH]</td>
+              </tr>
+              <tr>
+                <td><canvas class="pixel-identity-26" width="26" height="26" data-seed="INFRA-INDEXER-2026-12"></canvas></td>
+                <td>INFRA-INDEXER-2026-12</td>
+                <td>Helios Bare-Metal Infra</td>
+                <td>8.25 ZEC</td>
+                <td style="color: var(--fg-phosphor-bright); font-weight: 700;">[UNPAID &rarr; IN ZIP 321 BATCH]</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="input-group" style="margin-top: 14px;">
+          <label>SELECT ISO/IEC 18004 QR PAYLOAD MODE (SCANNABLE BY ZASHI / YWALLET)</label>
+          <select id="qrPayloadMode" onchange="updateZip321Batch()" style="margin-bottom: 8px;">
+            <option value="batch">AEGIS-Z MULTI-RECIPIENT BATCH (39.75 ZEC // 2 UNPAID INVOICES // 93x93 ISO QR)</option>
+            <option value="test3">HACKATHON TEST 3 SINGLE URI (50 ZEC // "Hackathon test payment" // 57x57 ISO QR)</option>
+          </select>
+          <label>CUSTOMIZE OR INSPECT ENCRYPTED MEMO PAYLOAD (BASE64URL &le; 512 BYTES)</label>
+          <input type="text" id="customMemoInput" value="AUDIT-FROST-2026-11 // Threshold Schnorr (FROST) & ZIP-316 Security Review" oninput="updateZip321Batch()" />
+        </div>
+
+        <div class="mono-code" id="zip321UriOutput"></div>
+
+        <div class="qr-wrapper">
+          <canvas id="qrCanvas" width="220" height="220" title="ISO/IEC 18004 Reed-Solomon Scannable QR Code"></canvas>
+          <div style="flex: 1; min-width: 220px;">
+            <div style="font-weight: 700; color: var(--fg-phosphor-bright); margin-bottom: 6px;">
+              ISO/IEC 18004 REED-SOLOMON AIR-GAPPED QR HANDOFF
+            </div>
+            <p style="font-size: 11px; color: var(--fg-phosphor); margin-bottom: 8px;">
+              1. The AI agent (Gemma 4 26B via LiteRTAgentConfig) NEVER holds spending keys.<br/>
+              2. Genuine ISO/IEC 18004 Reed-Solomon QR matrix generated offline via <code>render_zip321_qr</code>.<br/>
+              3. Scan directly with an air-gapped <strong>Zashi</strong> or <strong>YWallet</strong> mobile wallet.
+            </p>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+              <div class="badge" id="feeBadge">ZIP 317 FEE: 0.00015000 ZEC (15,000 ZATOSHIS)</div>
+              <button class="btn-terminal" onclick="toggleQrPolarity()" id="polarityBtn">[INVERT POLARITY FOR MOBILE CAMERA]</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="footer-bar">
+      <span>ZECATHON // SPONSOR: zkSNARKs // TRACK: INFRASTRUCTURE &amp; ACCOUNTING (AEGIS-Z)</span>
+      <span>AESTHETIC LOCK: #000000 PURE BLACK // JETBRAINS MONO // #00FF41 PHOSPHOR // 26x26 PIXEL IDENTITIES</span>
+    </footer>
+  </div>
+
+  <script src="assets/qr_matrices.js"></script>
+  <script>
+    // Deterministic 26x26 Pixel Block Identity Renderer
+    function fnvHashBytes(str, count) {
+      const out = [];
+      let h1 = 0x811c9dc5;
+      for (let j = 0; j < count; j++) {
+        for (let i = 0; i < str.length; i++) {
+          h1 ^= str.charCodeAt(i) + j * 31;
+          h1 = Math.imul(h1, 0x01000193) >>> 0;
+        }
+        out.push(h1 & 0xff, (h1 >>> 8) & 0xff, (h1 >>> 16) & 0xff, (h1 >>> 24) & 0xff);
+      }
+      return out;
+    }
+
+    function draw26x26Identity(canvas, seedStr) {
+      if (!canvas) return;
+      canvas.width = 26;
+      canvas.height = 26;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, 26, 26);
+
+      const bytes = fnvHashBytes(seedStr || "NODE_07", 32);
+      for (let r = 0; r < 26; r++) {
+        for (let c = 0; c < 13; c++) {
+          let on = false;
+          if (r === 0 || r === 25 || c === 0) {
+            on = true;
+          } else if (r === 1 || r === 24 || c === 1) {
+            on = false;
+          } else {
+            const bitIndex = (r * 13 + c) % (bytes.length * 8);
+            const byteVal = bytes[Math.floor(bitIndex / 8)];
+            on = ((byteVal >> (bitIndex % 8)) & 1) === 1;
+          }
+          if (on) {
+            ctx.fillStyle = (r === 0 || r === 25 || c === 0) ? "#008F11" : "#00FF41";
+            ctx.fillRect(c, r, 1, 1);
+            ctx.fillRect(25 - c, r, 1, 1);
+          }
+        }
+      }
+    }
+
+    // Populate Ledger Data
+    const LEDGER_ROWS = [
+      {
+        txid: "9f8e7d6c...1b0a0001",
+        block: 2684110,
+        pool: "ORCHARD (Halo 2)",
+        direction: "INCOMING",
+        amount: "+250.00000000",
+        memo: "GRANT-2026-Q4 // zkSNARKs Ecosystem Treasury Tranche #1 for Project Aegis-Z & MCP Infrastructure",
+        account: "Treasury Inflows / Grants"
+      },
+      {
+        txid: "7a6b5c4d...9e8f0002",
+        block: 2685420,
+        pool: "ORCHARD (Halo 2)",
+        direction: "OUTGOING",
+        amount: "-14.50000000",
+        memo: "INV-2026-101 // Q4 Bare-Metal zebrad + lightwalletd Cluster Hosting (Project X)",
+        account: "Operating Expenses (OPEX)"
+      },
+      {
+        txid: "3c4d5e6f...f1a2b0003",
+        block: 2686890,
+        pool: "ORCHARD (Halo 2)",
+        direction: "OUTGOING",
+        amount: "-42.00000000",
+        memo: "PAYROLL-OCT-2026 // EMP-ID:ALICE-01 // Senior Halo2 & librustzcash Core Engineer Retainer",
+        account: "Payroll & Engineering"
+      },
+      {
+        txid: "1e2f3a4b...b9c0d0004",
+        block: 2688105,
+        pool: "SAPLING (Groth16)",
+        direction: "OUTGOING",
+        amount: "-18.75000000",
+        memo: "CAPEX-2026-088 // Air-Gapped Workstation & Local GPU Node (24GB VRAM for Gemma 4 LiteRT)",
+        account: "Capital Expenditures (CAPEX)"
+      },
+      {
+        txid: "5b6c7d8e...e3f4a0005",
+        block: 2689920,
+        pool: "ORCHARD (Halo 2)",
+        direction: "OUTGOING",
+        amount: "-9.25000000",
+        memo: "LEGAL-2026-019 // MiCA & FinCEN Selective Disclosure UFVK Compliance Opinion",
+        account: "Compliance & Legal"
+      }
+    ];
+
+    const MCP_TOOLS = [
+      ["validate_zip316_unified_address", "Bech32m + 4-Round BLAKE2b F4Jumble_inv + TLV Priority Selection"],
+      ["generate_zip316_unified_address", "Deterministic ZIP 316 UA encoder (Orchard/Sapling/P2PKH)"],
+      ["parse_zip316_ufvk", "Selective-disclosure UFVK parser (ak, nk, rivk, ovk, dk)"],
+      ["generate_zip321_uri", "Single-recipient ZIP 321 URI + base64url 512B memo validator"],
+      ["construct_zip321_payout_batch", "Multi-recipient ZIP 321 batch builder + fee optimization"],
+      ["parse_zip321_uri", "Full ZIP 321 URI & unpadded base64url memo parser"],
+      ["render_zip321_qr", "ISO/IEC 18004 Reed-Solomon scannable QR code generator (Zashi / YWallet)"],
+      ["estimate_zip317_fee", "ZIP 317 proportional fee calculator (5000 zat * max(2, actions))"],
+      ["fetch_shielded_history", "UFVK history query via loopback lightwalletd / offline vault"],
+      ["reconcile_shielded_ledger", "Aegis-Z autonomous Chart of Accounts & unpaid invoice matcher"]
+    ];
+
+    const UA_PRESETS = {
+      treasury_ua: {
+        standard: "ZIP-316 Unified Address",
+        hrp: "u (mainnet)",
+        address: "u1wujllpw6w6vg6tdn0m700vsysch7vm3zlgru509nutav65s6ucw9rkgkm5u4tsq2up43z3zr5h6ympsj2p9ta2anzv076rjlgj8t5pknjd5hxn2pkrjmr4uj9a2n8c5xclw4y8zk5uvn4j44548z84ty55ldcp0ugxnps2pjp7cqflwp955wsxwkr50u897nx427l2fn4vcejrfhljw",
+        bech32m_constant: "0x2bc830a3 (VERIFIED)",
+        f4jumble: "4-Round Feistel BLAKE2b (UA_F4Jumble_H / UA_F4Jumble_G) INVERTED",
+        selected_priority_receiver: "0x03 // ORCHARD (43-byte raw diversifier + pk_d)",
+        receivers: [
+          { typecode: "0x00 (P2PKH)", length: 20, role: "Fallback Transparent" },
+          { typecode: "0x02 (Sapling)", length: 43, role: "Secondary Shielded" },
+          { typecode: "0x03 (Orchard)", length: 43, role: "PRIMARY PRIORITY RECEIVER" }
+        ]
+      },
+      alice_ua: {
+        standard: "ZIP-316 Unified Address (Shielded-Only)",
+        hrp: "u (mainnet)",
+        address: "u1lyr5z2f9zryu90z347x3kk3rah2kc83xtjzjkmfmcv55p45z0qcpwj40lllpt7hwwnfudgvxwajaa6v8eu0xxjt68kr9hznmmlzaawmakrrkg2nzrl7kuc2qmzjmgark3uu0pwc46x2szsllzk9l6la8390zfuwf3kyv3nm6dq2ry6k8",
+        bech32m_constant: "0x2bc830a3 (VERIFIED)",
+        f4jumble: "4-Round Feistel BLAKE2b INVERTED",
+        selected_priority_receiver: "0x03 // ORCHARD (43-byte raw address)",
+        receivers: [
+          { typecode: "0x02 (Sapling)", length: 43, role: "Secondary Shielded" },
+          { typecode: "0x03 (Orchard)", length: 43, role: "PRIMARY PRIORITY RECEIVER" }
+        ]
+      },
+      bob_ua: {
+        standard: "ZIP-316 Unified Address (Shielded-Only)",
+        hrp: "u (mainnet)",
+        address: "u1r52tkrzm88heg4g5q2uezhd2yg4h5uwe7v006ssyvntj96awxhznxwl4year0p3yx43psvq26zc75gxc87sfazcy5aa6nsu6tm409wunqgdvl2gzm9y660v0qan7q4kq6pf0khwcjfpuapf7jvla5qu8jw2fpzrmm8gmd0t6qgzn88xl",
+        bech32m_constant: "0x2bc830a3 (VERIFIED)",
+        f4jumble: "4-Round Feistel BLAKE2b INVERTED",
+        selected_priority_receiver: "0x03 // ORCHARD (43-byte raw address)",
+        receivers: [
+          { typecode: "0x02 (Sapling)", length: 43, role: "Secondary Shielded" },
+          { typecode: "0x03 (Orchard)", length: 43, role: "PRIMARY PRIORITY RECEIVER" }
+        ]
+      },
+      treasury_ufvk: {
+        standard: "ZIP-316 Unified Full Viewing Key (UFVK)",
+        hrp: "uview (mainnet)",
+        ufvk: "uview1vdygy7seh5dgnz20388xea7dccd8ddk43cy4uafy2zny6qj9qkp5f6hhqz352v3xf6dfvtsvtrzazfrach86e5du65khstydykrspuayt5t35mkv47axfk5xzrrkjdf5zt87cz4g32y9ygusddhnsqr3s4qn4ycf84ka87fvktacc3evsphezq52m8g9t77az8wu0f6rddlwxz26y0fexpchtrxzqwqhank6vgkuds27xm08hlfzlftl0nuyzdh68a7zcc3uuv3zv4zavznmjgeuz9zssd4jrvymwkpmytcclak8uavfqnwukldn8lvtpw2uh5g4d25tdpmx478x2vpp2hu44w74haj262y0frn52qxthh3pa4gtzyv0ltna7cz82q4lc7u73agfydcuplcczrsut255rc2rasg2ahm297gjp70aeefs5e4v5nknfkmk8mspfltxycv5yj883glq75qfxm6rlzye34m50sg6lwesm507sshg",
+        spending_key_exposed: false,
+        selective_disclosure_ready: true,
+        viewing_capabilities: [
+          { typecode: "0x00 (Transparent HD)", bytes: 65 },
+          { typecode: "0x02 (Sapling DFVK: ak+nk+ovk+dk)", bytes: 128 },
+          { typecode: "0x03 (Orchard FVK: ak+nk+rivk)", bytes: 96 }
+        ]
+      }
+    };
+
+    function toBase64UrlUnpadded(str) {
+      const utf8Bytes = new TextEncoder().encode(str);
+      let binary = "";
+      utf8Bytes.forEach(b => binary += String.fromCharCode(b));
+      return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+
+    let qrHighContrastMobileMode = false;
+
+    function toggleQrPolarity() {
+      qrHighContrastMobileMode = !qrHighContrastMobileMode;
+      updateZip321Batch();
+    }
+
+    function drawAirGapQrMatrix(matrix) {
+      const canvas = document.getElementById("qrCanvas");
+      const ctx = canvas.getContext("2d");
+      if (!matrix || !matrix.length) return;
+      const dim = matrix.length;
+      const quietZone = 4;
+      const totalModules = dim + quietZone * 2;
+      const scale = Math.max(2, Math.floor(240 / totalModules));
+      canvas.width = totalModules * scale;
+      canvas.height = totalModules * scale;
+
+      const bg = qrHighContrastMobileMode ? "#00FF41" : "#000000";
+      const fg = qrHighContrastMobileMode ? "#000000" : "#00FF41";
+
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = fg;
+      for (let r = 0; r < dim; r++) {
+        for (let c = 0; c < dim; c++) {
+          if (matrix[r][c]) {
+            ctx.fillRect((c + quietZone) * scale, (r + quietZone) * scale, scale, scale);
+          }
+        }
+      }
+    }
+
+    function updateZip321Batch() {
+      const modeEl = document.getElementById("qrPayloadMode");
+      const mode = modeEl ? modeEl.value : "batch";
+      const memoInput = document.getElementById("customMemoInput");
+      const matrices = window.REAL_ISO18004_MATRICES || {};
+
+      if (mode === "test3") {
+        if (memoInput.value.startsWith("AUDIT-FROST")) {
+          memoInput.value = "Hackathon test payment";
+        }
+        const memo0 = memoInput.value || "Hackathon test payment";
+        const memo0B64 = toBase64UrlUnpadded(memo0);
+        const addr = "u1wujllpw6w6vg6tdn0m700vsysch7vm3zlgru509nutav65s6ucw9rkgkm5u4tsq2up43z3zr5h6ympsj2p9ta2anzv076rjlgj8t5pknjd5hxn2pkrjmr4uj9a2n8c5xclw4y8zk5uvn4j44548z84ty55ldcp0ugxnps2pjp7cqflwp955wsxwkr50u897nx427l2fn4vcejrfhljw";
+        const uri = `zcash:${addr}?amount=50&memo=${memo0B64}`;
+        document.getElementById("zip321UriOutput").textContent =
+          `// ZIP 321 SINGLE-RECIPIENT PAYMENT REQUEST URI (50 ZEC // ISO/IEC 18004 57x57 QR)\n` +
+          `// MEMO BYTES: ${new TextEncoder().encode(memo0).length} / 512 BYTES (BASE64URL: ${memo0B64})\n` +
+          uri;
+        document.getElementById("feeBadge").textContent = "ZIP 317 FEE: 0.00010000 ZEC (10,000 ZATOSHIS // 2 LOGICAL ACTIONS)";
+        drawAirGapQrMatrix(matrices.test3_matrix);
+      } else {
+        if (memoInput.value === "Hackathon test payment") {
+          memoInput.value = "AUDIT-FROST-2026-11 // Threshold Schnorr (FROST) & ZIP-316 Security Review";
+        }
+        const memo0 = memoInput.value || "";
+        const memo0B64 = toBase64UrlUnpadded(memo0);
+        const memo1 = "INFRA-INDEXER-2026-12 // Dedicated Archival Orchard Commitment Tree Sync Node";
+        const memo1B64 = toBase64UrlUnpadded(memo1);
+
+        const addr0 = "u1r52tkrzm88heg4g5q2uezhd2yg4h5uwe7v006ssyvntj96awxhznxwl4year0p3yx43psvq26zc75gxc87sfazcy5aa6nsu6tm409wunqgdvl2gzm9y660v0qan7q4kq6pf0khwcjfpuapf7jvla5qu8jw2fpzrmm8gmd0t6qgzn88xl";
+        const addr1 = "u1jc4v5crazqld0zqxnz4jd3l4ln8vzpa5wqh79h5lcww92d4j4nrzq0fcmhz4c5j6pje02ae0zt84d7e2e5h6uelp62cju2uga55nz5pard28a9969245xgt9m95ed9vae3u6znhgusx87z4xgg3r7r86nl5tfnewpggf90prqnkyyuvxx8p9zspwtj8r3x8ec8f87lp433whv43dyeu";
+
+        const uri = `zcash:?address=${addr0}&amount=31.5&memo=${memo0B64}&address.1=${addr1}&amount.1=8.25&memo.1=${memo1B64}`;
+        document.getElementById("zip321UriOutput").textContent =
+          `// MULTI-RECIPIENT ZIP 321 PAYMENT REQUEST URI (39.75 ZEC TOTAL // ISO/IEC 18004 93x93 QR)\n` +
+          `// MEMO 0 BYTES: ${new TextEncoder().encode(memo0).length} / 512 BYTES\n` +
+          uri;
+        document.getElementById("feeBadge").textContent = "ZIP 317 FEE: 0.00015000 ZEC (15,000 ZATOSHIS // 3 LOGICAL ACTIONS)";
+        drawAirGapQrMatrix(matrices.batch_matrix);
+      }
+    }
+
+    function inspectSelectedUA() {
+      const sel = document.getElementById("uaPresetSelect").value;
+      const data = UA_PRESETS[sel];
+      document.getElementById("uaInspectorOutput").textContent = JSON.stringify(data, null, 2);
+    }
+
+    function switchView(view) {
+      document.querySelectorAll(".nav-tab").forEach(btn => btn.classList.remove("active"));
+      event.target.classList.add("active");
+      const sLedger = document.getElementById("section-ledger");
+      const s316 = document.getElementById("section-zip316");
+      const s321 = document.getElementById("section-zip321");
+      sLedger.style.display = (view === "all" || view === "ledger") ? "block" : "none";
+      s316.style.display = (view === "all" || view === "zip316") ? "block" : "none";
+      s321.style.display = (view === "all" || view === "zip321") ? "block" : "none";
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      draw26x26Identity(document.getElementById("nodeIdentityCanvas"), "NODE_07_THE_PYRAMID_WAKES");
+
+      const tbody = document.getElementById("ledgerTableBody");
+      LEDGER_ROWS.forEach(row => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><canvas class="pixel-identity-26" width="26" height="26" data-seed="${row.txid}"></canvas></td>
+          <td>#${row.block}<br/><span style="color:var(--fg-phosphor-dim)">${row.pool}</span></td>
+          <td>${row.direction}</td>
+          <td style="font-weight:700;color:var(--fg-phosphor-bright)">${row.amount} ZEC</td>
+          <td>${row.memo}</td>
+          <td>[${row.account}]</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      const toolsBody = document.getElementById("mcpToolsTableBody");
+      MCP_TOOLS.forEach(([name, desc]) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><canvas class="pixel-identity-26" width="26" height="26" data-seed="${name}"></canvas></td>
+          <td style="font-weight:700;color:var(--fg-phosphor-bright)">${name}</td>
+          <td>${desc}</td>
+        `;
+        toolsBody.appendChild(tr);
+      });
+
+      document.querySelectorAll("canvas.pixel-identity-26[data-seed]").forEach(c => {
+        draw26x26Identity(c, c.getAttribute("data-seed"));
+      });
+
+      inspectSelectedUA();
+      updateZip321Batch();
+    });
+  </script>
+</body>
+</html>

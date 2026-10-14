@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "Zcash_MCP_Server": {
+      "command": "python",
+      "args": [
+        "c:/Users/USER/Downloads/zechathon/server.py"
+      ],
+      "env": {
+        "PYTHONUTF8": "1",
+        "ZCASH_MCP_MODE": "simulation",
+        "ZEBRAD_RPC_URL": "http://127.0.0.1:8232",
+        "LIGHTWALLETD_URL": "http://127.0.0.1:9067"
+      }
+    }
+  }
+}

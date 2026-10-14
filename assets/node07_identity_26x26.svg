@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26" shape-rendering="crispEdges">
+  <rect width="26" height="26" fill="#000000"/>
+  <!-- Outer 1px Phosphor Frame -->
+  <rect x="0" y="0" width="26" height="1" fill="#008F11"/>
+  <rect x="0" y="25" width="26" height="1" fill="#008F11"/>
+  <rect x="0" y="0" width="1" height="26" fill="#008F11"/>
+  <rect x="25" y="0" width="1" height="26" fill="#008F11"/>
+  <!-- Symmetric 26x26 Pyramid / Node 07 Glyph -->
+  <rect x="12" y="3" width="2" height="2" fill="#39FF14"/>
+  <rect x="10" y="5" width="6" height="2" fill="#00FF41"/>
+  <rect x="8" y="7" width="10" height="2" fill="#00FF41"/>
+  <rect x="6" y="9" width="4" height="2" fill="#00FF41"/>
+  <rect x="12" y="9" width="2" height="2" fill="#39FF14"/>
+  <rect x="16" y="9" width="4" height="2" fill="#00FF41"/>
+  <rect x="5" y="11" width="16" height="2" fill="#00FF41"/>
+  <rect x="4" y="13" width="4" height="2" fill="#00FF41"/>
+  <rect x="10" y="13" width="6" height="2" fill="#39FF14"/>
+  <rect x="18" y="13" width="4" height="2" fill="#00FF41"/>
+  <rect x="3" y="15" width="20" height="2" fill="#00FF41"/>
+  <rect x="5" y="18" width="4" height="2" fill="#008F11"/>
+  <rect x="11" y="18" width="4" height="2" fill="#39FF14"/>
+  <rect x="17" y="18" width="4" height="2" fill="#008F11"/>
+  <rect x="3" y="21" width="20" height="2" fill="#00FF41"/>
+</svg>
