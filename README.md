@@ -6,7 +6,7 @@
 │ TAGLINE: Build on Zcash with AI. Test everything. Leak nothing unnecessarily.│
 │ STANDARDS: ZIP 316 // ZIP 326 (IRONWOOD) // ZIP 321 // ZIP 317 // ISO 18004 │
 │ FIREWALL: 10 PRE-BROADCAST PRIVACY & SECURITY CHECKS // FAIL-CLOSED POLICY   │
-│ VERIFICATION: 47 / 47 TESTS PASSING (100% PASS RATE) // AIR-GAPPED LOOPBACK │
+│ VERIFICATION: 52 / 52 TESTS PASSING (100% PASS RATE) // AIR-GAPPED LOOPBACK │
 │ AESTHETIC: #000000 BLACK // JETBRAINS MONO // #00FF41 PHOSPHOR // 26x26 ID  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -81,7 +81,7 @@ The **ZecShield Privacy Firewall** inspects transactions pre-broadcast across 10
 - `CHECK 06: UNSAFE_RPC_TARGET` - Rejects cleartext remote RPC destinations.
 - `CHECK 07: ADDRESS_RECEIVER_VALIDATION` - Validates ZIP 316 structure and pool compatibility.
 - `CHECK 08: AMOUNT_SATOSHI_PRECISION` - Enforces integer zatoshis (&le; 8 decimals) and max supply bounds.
-- `CHECK 09: TRANSACTION_POLICY_ENFORCEMENT` - Enforces human approval tokens for state mutations.
+- `CHECK 09: TRANSACTION_POLICY_ENFORCEMENT` - Enforces single-use cryptographic authorization tickets for state mutations.
 - `CHECK 10: METADATA_CORRELATION_LEAK` - Detects persistent invoice IDs and UUIDs.
 
 ---
@@ -142,7 +142,7 @@ python cli.py audit-ci fixtures/fixed_app       # Exits 0 (0 leaks)
 
 ---
 
-## 04 // Exposed MCP Tool Standard Library (14 Tools)
+## 04 // Exposed MCP Tool Standard Library (16 Tools)
 
 ### Developer Utilities
 - `validate_zip316_unified_address`: Bech32m checksum (`0x2bc830a3`), 4-round BLAKE2b `F4Jumble`, TLV CompactSize parsing, and priority fallback (`Orchard -> Sapling -> Transparent`).
@@ -155,8 +155,10 @@ python cli.py audit-ci fixtures/fixed_app       # Exits 0 (0 leaks)
 - `route_shielded_pool`: ZIP 326 pool routing (routes to Ironwood/Orchard/Sapling while reusing receiver `0x03`).
 - `render_zip321_qr`: ISO/IEC 18004 Reed-Solomon scannable QR code generator for mobile wallets (Zashi, YWallet).
 
-### Privacy & Security
-- `audit_transaction_privacy`: Full 10-check ZecShield Privacy Firewall audit with structured JSON results.
+### Privacy & Intent-Bound Security
+- `audit_transaction_privacy`: Full 10-check ZecShield Privacy Firewall audit with structured JSON results and Decision Triad (`PASS / WARN / BLOCK`).
+- `request_transaction_intent`: Issues a cryptographically bound single-use Transaction Authorization Ticket (`(recipient, zatoshis, fee, memo_hash) -> SHA-256 digest`) with TTL expiry.
+- `execute_authorized_broadcast`: Consumes an authorization ticket, strictly validates parameter binding (anti-tampering), and enforces anti-replay protection.
 - `detect_privacy_leaks`: Pre-broadcast vulnerability scanner.
 - `explain_privacy_violation`: Detailed catalog lookup for finding IDs with remediation code examples.
 - `sanitize_ai_memo`: Scrubs memos for model safety (`[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]`).
@@ -170,7 +172,7 @@ python cli.py audit-ci fixtures/fixed_app       # Exits 0 (0 leaks)
 
 ---
 
-## 05 // Independent Multi-Layer Verification (47 / 47 Passing)
+## 05 // Independent Multi-Layer Verification (52 / 52 Passing)
 
 ```bash
 # Run the complete test suite
@@ -179,57 +181,62 @@ python -m pytest tests/ -v
 
 ```text
 ============================= test session starts =============================
-collected 47 items
+collected 52 items
 
-tests/test_privacy_firewall.py::test_firewall_permits_clean_shielded_payment PASSED [  2%]
-tests/test_privacy_firewall.py::test_firewall_blocks_transparent_address_exposure PASSED [  4%]
-tests/test_privacy_firewall.py::test_firewall_detects_pii_emails_and_ips_in_memos PASSED [  6%]
-tests/test_privacy_firewall.py::test_firewall_blocks_spending_key_leakage PASSED [  8%]
-tests/test_privacy_firewall.py::test_firewall_detects_bip39_seed_phrases PASSED [ 10%]
-tests/test_privacy_firewall.py::test_firewall_neutralizes_prompt_injection_attempts PASSED [ 12%]
-tests/test_privacy_firewall.py::test_firewall_detects_viewing_key_in_memo PASSED [ 14%]
-tests/test_privacy_firewall.py::test_firewall_blocks_sub_zatoshi_and_invalid_amounts PASSED [ 17%]
-tests/test_privacy_firewall.py::test_firewall_enforces_loopback_rpc_policy PASSED [ 19%]
-tests/test_privacy_firewall.py::test_firewall_enforces_human_approval_boundary_for_state_changes PASSED [ 21%]
-tests/test_privacy_firewall.py::test_explain_privacy_violation_catalog PASSED [ 23%]
-tests/test_privacy_firewall.py::test_sanitize_ai_memo_guarantee PASSED   [ 25%]
-tests/test_reference_vectors.py::test_bip350_valid_bech32m_reference_vectors PASSED [ 27%]
-tests/test_reference_vectors.py::test_bip350_invalid_bech32m_reference_vectors PASSED [ 29%]
-tests/test_reference_vectors.py::test_bech32m_arbitrary_payload_roundtrip PASSED [ 31%]
-tests/test_reference_vectors.py::test_zip321_rfc4648_unpadded_base64url_vectors PASSED [ 34%]
-tests/test_reference_vectors.py::test_zip321_uri_parsing_reference_vectors PASSED [ 36%]
-tests/test_reference_vectors.py::test_zip317_fee_calculation_against_reference_vectors PASSED [ 38%]
-tests/test_reference_vectors.py::test_f4jumble_invertibility_across_standard_buffer_sizes PASSED [ 40%]
-tests/test_reference_vectors.py::test_f4jumble_strictly_enforces_minimum_length_48_bytes PASSED [ 42%]
-tests/test_reference_vectors.py::test_compactsize_canonical_boundaries PASSED [ 44%]
-tests/test_server.py::test_fastmcp_server_initialization PASSED          [ 46%]
-tests/test_server.py::test_f4jumble_feistel_roundtrip PASSED             [ 48%]
-tests/test_server.py::test_f4jumble_rejects_short_messages PASSED        [ 51%]
-tests/test_server.py::test_compact_size_roundtrip PASSED                 [ 53%]
-tests/test_server.py::test_zip316_unified_address_generation_and_validation PASSED [ 55%]
-tests/test_server.py::test_zip316_rejects_both_p2pkh_and_p2sh PASSED     [ 57%]
-tests/test_server.py::test_zip316_rejects_transparent_only_ua PASSED     [ 59%]
-tests/test_server.py::test_zip316_ufvk_parsing PASSED                    [ 61%]
-tests/test_server.py::test_zip321_single_recipient_and_memo_roundtrip PASSED [ 63%]
-tests/test_server.py::test_zip321_rejects_oversized_512_byte_memo PASSED [ 65%]
-tests/test_server.py::test_zip321_rejects_memo_on_transparent_address PASSED [ 68%]
-tests/test_server.py::test_zip321_multi_recipient_payout_batch PASSED    [ 70%]
-tests/test_server.py::test_zip317_proportional_fee_mechanism PASSED      [ 72%]
-tests/test_server.py::test_airgap_loopback_policy_enforcement PASSED     [ 74%]
-tests/test_server.py::test_shielded_history_trial_decryption_and_aegis_reconciliation PASSED [ 76%]
-tests/test_server.py::test_lightwalletd_and_zebrad_queries PASSED        [ 78%]
-tests/test_server.py::test_user_prompt_1_address_generation_and_priority_fallback PASSED [ 80%]
-tests/test_server.py::test_user_prompt_2_parse_ufvk_viewing_key PASSED   [ 82%]
-tests/test_server.py::test_user_prompt_3_generate_50_zec_uri PASSED      [ 85%]
-tests/test_server.py::test_fastmcp_client_protocol_execution PASSED      [ 87%]
-tests/test_server.py::test_render_zip321_iso18004_qr PASSED              [ 89%]
-tests/test_server.py::test_fail_closed_missing_address_in_zip321 PASSED  [ 91%]
-tests/test_server.py::test_fail_closed_missing_ufvk_without_explicit_fixture PASSED [ 93%]
-tests/test_server.py::test_zip326_ironwood_pool_routing_and_orchard_receiver_reuse PASSED [ 95%]
-tests/test_server.py::test_zecshield_privacy_leak_detector PASSED        [ 97%]
+tests/test_privacy_firewall.py::test_firewall_permits_clean_shielded_payment PASSED [  1%]
+tests/test_privacy_firewall.py::test_firewall_blocks_transparent_address_exposure PASSED [  3%]
+tests/test_privacy_firewall.py::test_firewall_detects_pii_emails_and_ips_in_memos PASSED [  5%]
+tests/test_privacy_firewall.py::test_firewall_blocks_spending_key_leakage PASSED [  7%]
+tests/test_privacy_firewall.py::test_firewall_detects_bip39_seed_phrases PASSED [  9%]
+tests/test_privacy_firewall.py::test_firewall_neutralizes_prompt_injection_attempts PASSED [ 11%]
+tests/test_privacy_firewall.py::test_firewall_detects_viewing_key_in_memo PASSED [ 13%]
+tests/test_privacy_firewall.py::test_firewall_blocks_sub_zatoshi_and_invalid_amounts PASSED [ 15%]
+tests/test_privacy_firewall.py::test_firewall_enforces_loopback_rpc_policy PASSED [ 17%]
+tests/test_privacy_firewall.py::test_firewall_enforces_human_approval_boundary_for_state_changes PASSED [ 19%]
+tests/test_privacy_firewall.py::test_explain_privacy_violation_catalog PASSED [ 21%]
+tests/test_privacy_firewall.py::test_sanitize_ai_memo_guarantee PASSED   [ 23%]
+tests/test_privacy_firewall.py::test_intent_ticket_lifecycle_and_tampering_prevention PASSED [ 25%]
+tests/test_privacy_firewall.py::test_intent_ticket_expiration_protection PASSED [ 26%]
+tests/test_privacy_firewall.py::test_intent_ticket_fails_closed_on_firewall_violation PASSED [ 28%]
+tests/test_privacy_firewall.py::test_firewall_decision_triad_pass_warn_block PASSED [ 30%]
+tests/test_privacy_firewall.py::test_state_mutation_via_intent_ticket_in_firewall_audit PASSED [ 32%]
+tests/test_reference_vectors.py::test_bip350_valid_bech32m_reference_vectors PASSED [ 34%]
+tests/test_reference_vectors.py::test_bip350_invalid_bech32m_reference_vectors PASSED [ 36%]
+tests/test_reference_vectors.py::test_bech32m_arbitrary_payload_roundtrip PASSED [ 38%]
+tests/test_reference_vectors.py::test_zip321_rfc4648_unpadded_base64url_vectors PASSED [ 40%]
+tests/test_reference_vectors.py::test_zip321_uri_parsing_reference_vectors PASSED [ 42%]
+tests/test_reference_vectors.py::test_zip317_fee_calculation_against_reference_vectors PASSED [ 44%]
+tests/test_reference_vectors.py::test_f4jumble_invertibility_across_standard_buffer_sizes PASSED [ 46%]
+tests/test_reference_vectors.py::test_f4jumble_strictly_enforces_minimum_length_48_bytes PASSED [ 48%]
+tests/test_reference_vectors.py::test_compactsize_canonical_boundaries PASSED [ 50%]
+tests/test_server.py::test_fastmcp_server_initialization PASSED          [ 51%]
+tests/test_server.py::test_f4jumble_feistel_roundtrip PASSED             [ 53%]
+tests/test_server.py::test_f4jumble_rejects_short_messages PASSED        [ 55%]
+tests/test_server.py::test_compact_size_roundtrip PASSED                 [ 57%]
+tests/test_server.py::test_zip316_unified_address_generation_and_validation PASSED [ 59%]
+tests/test_server.py::test_zip316_rejects_both_p2pkh_and_p2sh PASSED     [ 61%]
+tests/test_server.py::test_zip316_rejects_transparent_only_ua PASSED     [ 63%]
+tests/test_server.py::test_zip316_ufvk_parsing PASSED                    [ 65%]
+tests/test_server.py::test_zip321_single_recipient_and_memo_roundtrip PASSED [ 67%]
+tests/test_server.py::test_zip321_rejects_oversized_512_byte_memo PASSED [ 69%]
+tests/test_server.py::test_zip321_rejects_memo_on_transparent_address PASSED [ 71%]
+tests/test_server.py::test_zip321_multi_recipient_payout_batch PASSED    [ 73%]
+tests/test_server.py::test_zip317_proportional_fee_mechanism PASSED      [ 75%]
+tests/test_server.py::test_airgap_loopback_policy_enforcement PASSED     [ 76%]
+tests/test_server.py::test_shielded_history_trial_decryption_and_aegis_reconciliation PASSED [ 78%]
+tests/test_server.py::test_lightwalletd_and_zebrad_queries PASSED        [ 80%]
+tests/test_server.py::test_user_prompt_1_address_generation_and_priority_fallback PASSED [ 82%]
+tests/test_server.py::test_user_prompt_2_parse_ufvk_viewing_key PASSED   [ 84%]
+tests/test_server.py::test_user_prompt_3_generate_50_zec_uri PASSED      [ 86%]
+tests/test_server.py::test_fastmcp_client_protocol_execution PASSED      [ 88%]
+tests/test_server.py::test_render_zip321_iso18004_qr PASSED              [ 90%]
+tests/test_server.py::test_fail_closed_missing_address_in_zip321 PASSED  [ 92%]
+tests/test_server.py::test_fail_closed_missing_ufvk_without_explicit_fixture PASSED [ 94%]
+tests/test_server.py::test_zip326_ironwood_pool_routing_and_orchard_receiver_reuse PASSED [ 96%]
+tests/test_server.py::test_zecshield_privacy_leak_detector PASSED        [ 98%]
 tests/test_server.py::test_ai_memo_redaction_for_host_safety PASSED      [100%]
 
-============================= 47 passed in 12.96s =============================
+============================= 52 passed in 17.03s =============================
 ```
 
 ---

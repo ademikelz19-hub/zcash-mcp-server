@@ -16,6 +16,8 @@ from server import (
     detect_privacy_leaks,
     explain_privacy_violation,
     sanitize_ai_memo,
+    request_transaction_intent,
+    execute_authorized_broadcast,
 )
 
 
@@ -206,3 +208,195 @@ def test_sanitize_ai_memo_guarantee() -> None:
     assert san["sanitized_memo"] == "[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]"
     assert "INV-2026-999" not in san["sanitized_memo"]
     assert "alice@corp.com" not in san["sanitized_memo"]
+
+
+def test_intent_ticket_lifecycle_and_tampering_prevention() -> None:
+    """LAYER C // TEST 13: Cryptographic Intent Ticket binds parameters and blocks substitution & replay attacks."""
+    ticket = request_transaction_intent(
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="12.5",
+        memo_utf8="Security audit payout for Core & Tooling",
+        fee_zatoshis=10000,
+        ttl_seconds=300,
+    )
+    assert ticket["status"] == "PENDING_HUMAN_APPROVAL"
+    assert ticket["authorized"] is False
+    assert ticket["decision"] == "PASS"
+    ticket_id = ticket["ticket_id"]
+    approval_token = ticket["approval_token"]
+    assert ticket_id.startswith("zec_ticket_")
+    assert approval_token.startswith("ZEC_AUTH_")
+
+    # Attack Vector 1: Parameter substitution - altered recipient
+    tampered_rec = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient="u1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+        amount_zec="12.5",
+        memo_utf8="Security audit payout for Core & Tooling",
+        fee_zatoshis=10000,
+        human_approval_token=approval_token,
+    )
+    assert tampered_rec["status"] == "BROADCAST_REJECTED"
+    assert tampered_rec["error"] == "INTENT_TAMPERING_DETECTED"
+
+    # Attack Vector 2: Parameter substitution - altered amount (stealing 100x funds)
+    tampered_amt = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="1250.0",
+        memo_utf8="Security audit payout for Core & Tooling",
+        fee_zatoshis=10000,
+        human_approval_token=approval_token,
+    )
+    assert tampered_amt["status"] == "BROADCAST_REJECTED"
+    assert tampered_amt["error"] == "INTENT_TAMPERING_DETECTED"
+
+    # Attack Vector 3: Parameter substitution - altered memo
+    tampered_memo = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="12.5",
+        memo_utf8="Attacker altered memo",
+        fee_zatoshis=10000,
+        human_approval_token=approval_token,
+    )
+    assert tampered_memo["status"] == "BROADCAST_REJECTED"
+    assert tampered_memo["error"] == "INTENT_TAMPERING_DETECTED"
+
+    # Attack Vector 4: Forged authorization token
+    forged_token = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="12.5",
+        memo_utf8="Security audit payout for Core & Tooling",
+        fee_zatoshis=10000,
+        human_approval_token="ZEC_AUTH_FORGED_HACKER_TOKEN_9999",
+    )
+    assert forged_token["status"] == "BROADCAST_REJECTED"
+    assert forged_token["error"] == "INVALID_APPROVAL_TOKEN"
+
+    # Honest execution: Exact parameter match + valid token -> Broadcast succeeds
+    honest_res = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="12.5",
+        memo_utf8="Security audit payout for Core & Tooling",
+        fee_zatoshis=10000,
+        human_approval_token=approval_token,
+    )
+    assert honest_res["status"] == "BROADCAST_EXECUTED"
+    assert honest_res["authorized"] is True
+    assert len(honest_res["txid"]) == 64
+
+    # Attack Vector 5: Anti-Replay - Replaying consumed ticket fails closed
+    replay_res = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="12.5",
+        memo_utf8="Security audit payout for Core & Tooling",
+        fee_zatoshis=10000,
+        human_approval_token=approval_token,
+    )
+    assert replay_res["status"] == "BROADCAST_REJECTED"
+    assert replay_res["error"] == "TICKET_ALREADY_CONSUMED"
+
+
+def test_intent_ticket_expiration_protection() -> None:
+    """LAYER C // TEST 14: Intent tickets with expired TTL fail closed immediately."""
+    import time
+    ticket = request_transaction_intent(
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="1.0",
+        memo_utf8="Quick TTL test",
+        ttl_seconds=1,
+    )
+    ticket_id = ticket["ticket_id"]
+    token = ticket["approval_token"]
+    time.sleep(1.1)
+
+    exp_res = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="1.0",
+        memo_utf8="Quick TTL test",
+        human_approval_token=token,
+    )
+    assert exp_res["status"] == "BROADCAST_REJECTED"
+    assert exp_res["error"] == "TICKET_EXPIRED"
+
+
+def test_intent_ticket_fails_closed_on_firewall_violation() -> None:
+    """LAYER C // TEST 15: Cannot issue intent tickets for transactions violating privacy firewall."""
+    # Transparent address rejected
+    t_ticket = request_transaction_intent(
+        recipient="t1VpYecBW4UudbGcy4ufh61eWxQCoFaUrPs",
+        amount_zec="5.0",
+    )
+    assert t_ticket["ticket_id"] is None
+    assert t_ticket["status"] == "REJECTED_BY_FIREWALL"
+    assert t_ticket["decision"] == "BLOCK"
+
+    # Spending key leak in memo rejected
+    key_ticket = request_transaction_intent(
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="1.0",
+        memo_utf8="Leaked secret-extended-keymain1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+    )
+    assert key_ticket["ticket_id"] is None
+    assert key_ticket["status"] == "REJECTED_BY_FIREWALL"
+    assert key_ticket["decision"] == "BLOCK"
+
+
+def test_firewall_decision_triad_pass_warn_block() -> None:
+    """LAYER C // TEST 16: Evaluates full decision triad (PASS / WARN / BLOCK) across severity spectrum."""
+    # PASS: Zero findings
+    audit_pass = audit_transaction_privacy(
+        address=DEFAULT_TREASURY_UA,
+        amount_zec="10.0",
+        memo_utf8="Clean shielded transfer",
+        fee_zatoshis=10000,
+    )
+    assert audit_pass["decision"] == "PASS"
+    assert audit_pass["verdict"] == "PERMITTED"
+    assert audit_pass["is_safe_to_broadcast"] is True
+
+    # WARN: Correlation ID present, but 0 critical/high
+    audit_warn = audit_transaction_privacy(
+        address=DEFAULT_TREASURY_UA,
+        amount_zec="10.0",
+        memo_utf8="Internal transfer for ORDER-994821",
+    )
+    assert audit_warn["decision"] == "WARN"
+    assert audit_warn["verdict"] == "PERMITTED"
+    assert audit_warn["is_safe_to_broadcast"] is True
+
+    # BLOCK: Critical transparent or PII violation
+    audit_block = audit_transaction_privacy(
+        address=DEFAULT_TREASURY_UA,
+        amount_zec="10.0",
+        memo_utf8="Please send receipt to dev@company.org",
+    )
+    assert audit_block["decision"] == "BLOCK"
+    assert audit_block["verdict"] == "BLOCKED_BY_FIREWALL"
+    assert audit_block["is_safe_to_broadcast"] is False
+
+
+def test_state_mutation_via_intent_ticket_in_firewall_audit() -> None:
+    """LAYER C // TEST 17: Firewall audit accepts intent_ticket_id + approval_token for state-changing calls."""
+    ticket = request_transaction_intent(
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="3.0",
+        memo_utf8="Firewall ticket integration test",
+    )
+    # Using the valid ticket in audit_transaction_privacy passes Check 09
+    audit_res = audit_transaction_privacy(
+        address=DEFAULT_TREASURY_UA,
+        amount_zec="3.0",
+        memo_utf8="Firewall ticket integration test",
+        is_state_changing=True,
+        intent_ticket_id=ticket["ticket_id"],
+        human_approval_token=ticket["approval_token"],
+    )
+    assert audit_res["is_safe_to_broadcast"] is True
+    assert "ZEC-AUTH-001" not in [f["id"] for f in audit_res["findings"]]
+

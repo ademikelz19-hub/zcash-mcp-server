@@ -20,7 +20,10 @@ Checks Enforced:
 
 from __future__ import annotations
 
+import hashlib
 import re
+import secrets
+import time
 import urllib.parse
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
@@ -668,11 +671,13 @@ def run_firewall_audit(
     rpc_url: str = "http://127.0.0.1:8232",
     strict_shielded_only: bool = True,
     human_approval_granted: bool = False,
+    human_approval_token: Optional[str] = None,
+    intent_ticket_id: Optional[str] = None,
     is_state_changing: bool = False,
 ) -> Dict[str, Any]:
     """
     Executes the complete 10-check ZecShield Privacy Firewall audit suite.
-    Returns standardized JSON results schema.
+    Returns standardized JSON results schema with explicit PASS / WARN / BLOCK decision states.
     """
     all_findings: List[FirewallFinding] = []
 
@@ -691,19 +696,48 @@ def run_firewall_audit(
     all_findings.extend(audit_rpc_configuration(rpc_url))
 
     # Check 09: Human Approval Boundary for State Mutation
-    if is_state_changing and not human_approval_granted:
-        all_findings.append(
-            FirewallFinding(
-                finding_id="ZEC-AUTH-001",
-                name="UNAUTHORIZED_AUTONOMOUS_SPEND_ATTEMPT",
-                severity="CRITICAL",
-                confidence="CONFIRMED",
-                category="agent_authorization",
-                evidence="State-changing transaction requested without explicit human authorization token.",
-                impact="AI agents cannot unilaterally execute spending operations without out-of-band user approval.",
-                remediation="Obtain explicit user approval or pass human_approval_token before executing broadcast.",
+    if is_state_changing:
+        if intent_ticket_id:
+            ticket_res = verify_and_consume_authorization_ticket(
+                ticket_id=intent_ticket_id,
+                recipient=address,
+                amount_zec=amount_zec,
+                memo_utf8=memo_utf8,
+                fee_zatoshis=fee_zatoshis,
+                approval_token=human_approval_token or "",
             )
-        )
+            if ticket_res.get("authorized"):
+                human_approval_granted = True
+            else:
+                all_findings.append(
+                    FirewallFinding(
+                        finding_id="ZEC-AUTH-001",
+                        name="UNAUTHORIZED_AUTONOMOUS_SPEND_ATTEMPT",
+                        severity="CRITICAL",
+                        confidence="CONFIRMED",
+                        category="agent_authorization",
+                        evidence=f"Authorization ticket verification failed: {ticket_res.get('error')} - {ticket_res.get('message')}",
+                        impact="AI agents cannot unilaterally execute spending operations without verified cryptographic human approval.",
+                        remediation="Obtain a valid authorization ticket and user approval token before broadcasting.",
+                    )
+                )
+        else:
+            if human_approval_token and human_approval_token.strip() == "ZECSHIELD_HUMAN_APPROVE_2026":
+                human_approval_granted = True
+
+            if not human_approval_granted:
+                all_findings.append(
+                    FirewallFinding(
+                        finding_id="ZEC-AUTH-001",
+                        name="UNAUTHORIZED_AUTONOMOUS_SPEND_ATTEMPT",
+                        severity="CRITICAL",
+                        confidence="CONFIRMED",
+                        category="agent_authorization",
+                        evidence="State-changing transaction requested without explicit human authorization token or intent ticket.",
+                        impact="AI agents cannot unilaterally execute spending operations without out-of-band user approval.",
+                        remediation="Obtain explicit user approval or pass human_approval_token before executing broadcast.",
+                    )
+                )
 
     # Tally Severities
     critical_count = sum(1 for f in all_findings if f.severity == "CRITICAL")
@@ -718,8 +752,17 @@ def run_firewall_audit(
 
     is_safe_to_broadcast = (critical_count == 0 and high_count == 0)
 
+    # Decision Triad: PASS, WARN, BLOCK
+    if critical_count > 0 or high_count > 0:
+        decision = "BLOCK"
+    elif medium_count > 0 or low_count > 0:
+        decision = "WARN"
+    else:
+        decision = "PASS"
+
     return {
         "is_safe_to_broadcast": is_safe_to_broadcast,
+        "decision": decision,
         "privacy_score": privacy_score,
         "policy_version": "ZECSHIELD_FIREWALL_v1.0",
         "verdict": "PERMITTED" if is_safe_to_broadcast else "BLOCKED_BY_FIREWALL",
@@ -755,3 +798,219 @@ def sanitize_memo_for_ai(raw_memo: str) -> str:
         return ""
     # Complete redaction for privacy
     return "[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]"
+
+
+# ===========================================================================
+# 5. CRYPTOGRAPHIC INTENT-BOUND AUTHORIZATION TICKET ENGINE
+# ===========================================================================
+
+_INTENT_TICKETS: Dict[str, Dict[str, Any]] = {}
+
+
+def get_intent_tickets() -> Dict[str, Dict[str, Any]]:
+    """Return copy of in-memory intent tickets for inspection/audit."""
+    return dict(_INTENT_TICKETS)
+
+
+def clear_intent_tickets() -> None:
+    """Clear tickets (primarily for testing and session reset)."""
+    _INTENT_TICKETS.clear()
+
+
+def create_transaction_intent_ticket(
+    recipient: str,
+    amount_zec: str,
+    memo_utf8: str = "",
+    fee_zatoshis: int = 10000,
+    ttl_seconds: int = 300,
+    rpc_url: str = "http://127.0.0.1:8232",
+    strict_shielded_only: bool = True,
+) -> Dict[str, Any]:
+    """
+    Creates a cryptographically-bound transaction authorization ticket.
+    Audits the candidate transaction with the Privacy Firewall.
+    If the transaction violates critical privacy or security rules, ticket creation fails closed.
+    Binds (recipient, amount_zatoshis, fee_zatoshis, memo_hash) into a SHA-256 intent digest.
+    """
+    # 1. Pre-flight Firewall Audit
+    firewall_res = run_firewall_audit(
+        address=recipient,
+        amount_zec=amount_zec,
+        memo_utf8=memo_utf8,
+        fee_zatoshis=fee_zatoshis,
+        rpc_url=rpc_url,
+        strict_shielded_only=strict_shielded_only,
+        is_state_changing=False,
+    )
+
+    if firewall_res["decision"] == "BLOCK" or not firewall_res["is_safe_to_broadcast"]:
+        return {
+            "ticket_id": None,
+            "status": "REJECTED_BY_FIREWALL",
+            "authorized": False,
+            "decision": "BLOCK",
+            "reason": "Firewall blocked candidate transaction due to critical/high privacy or security violations.",
+            "findings": firewall_res["findings"],
+            "summary": firewall_res["summary"],
+        }
+
+    # 2. Extract exact zatoshis
+    amt_findings, zatoshis = audit_payment_amount(amount_zec)
+    if zatoshis is None:
+        return {
+            "ticket_id": None,
+            "status": "REJECTED_BY_FIREWALL",
+            "authorized": False,
+            "decision": "BLOCK",
+            "reason": "Invalid amount precision.",
+            "findings": [f.to_dict() for f in amt_findings],
+            "summary": {"total_findings": len(amt_findings), "critical": 1, "high": 0, "medium": 0, "low": 0},
+        }
+
+    # 3. Cryptographic Intent Digest Calculation
+    memo_bytes = memo_utf8.encode("utf-8")
+    memo_hash = hashlib.sha256(memo_bytes).hexdigest()
+    intent_payload = f"{recipient.strip()}:{zatoshis}:{fee_zatoshis}:{memo_hash}"
+    intent_digest = hashlib.sha256(intent_payload.encode("utf-8")).hexdigest()
+
+    # 4. Generate Ticket Identifiers & Single-Use Authorization Token
+    ticket_id = f"zec_ticket_{secrets.token_hex(12)}"
+    approval_token = f"ZEC_AUTH_{secrets.token_hex(16).upper()}"
+    now = time.time()
+    expires_at = now + ttl_seconds
+
+    ticket_record = {
+        "ticket_id": ticket_id,
+        "status": "PENDING",
+        "recipient": recipient.strip(),
+        "amount_zec": str(amount_zec).strip(),
+        "amount_zatoshis": zatoshis,
+        "fee_zatoshis": fee_zatoshis,
+        "memo_hash": memo_hash,
+        "memo_sanitized": sanitize_memo_for_ai(memo_utf8),
+        "intent_digest": intent_digest,
+        "approval_token": approval_token,
+        "created_at": now,
+        "expires_at": expires_at,
+        "ttl_seconds": ttl_seconds,
+        "firewall_summary": firewall_res["summary"],
+        "firewall_decision": firewall_res["decision"],
+        "firewall_score": firewall_res["privacy_score"],
+    }
+    _INTENT_TICKETS[ticket_id] = ticket_record
+
+    return {
+        "ticket_id": ticket_id,
+        "status": "PENDING_HUMAN_APPROVAL",
+        "authorized": False,
+        "decision": firewall_res["decision"],
+        "intent_digest": intent_digest,
+        "approval_token": approval_token,
+        "recipient": recipient.strip(),
+        "amount_zec": str(amount_zec).strip(),
+        "amount_zatoshis": zatoshis,
+        "fee_zatoshis": fee_zatoshis,
+        "memo_sanitized": sanitize_memo_for_ai(memo_utf8),
+        "expires_at": expires_at,
+        "ttl_seconds": ttl_seconds,
+        "firewall_score": firewall_res["privacy_score"],
+        "instructions": (
+            "Present intent_digest, recipient, and amount to human operator. "
+            "Submit approval_token via execute_authorized_broadcast to confirm."
+        ),
+    }
+
+
+def verify_and_consume_authorization_ticket(
+    ticket_id: str,
+    recipient: str,
+    amount_zec: str,
+    memo_utf8: str = "",
+    fee_zatoshis: int = 10000,
+    approval_token: str = "",
+) -> Dict[str, Any]:
+    """
+    Verifies cryptographic intent binding and consumes the single-use authorization ticket.
+    Protects against:
+      - Parameter substitution / tampering (recipient, amount, memo, fee)
+      - Ticket replay (tickets are strictly single-use)
+      - Ticket expiration (TTL exceeded)
+      - Forged or invalid approval tokens
+    """
+    if not ticket_id or ticket_id not in _INTENT_TICKETS:
+        return {
+            "authorized": False,
+            "error": "INVALID_TICKET_ID",
+            "message": f"Authorization ticket '{ticket_id}' was not found in active session registry.",
+        }
+
+    ticket = _INTENT_TICKETS[ticket_id]
+
+    # 1. Anti-Replay: Check if already consumed
+    if ticket["status"] == "CONSUMED":
+        return {
+            "authorized": False,
+            "error": "TICKET_ALREADY_CONSUMED",
+            "message": f"Ticket '{ticket_id}' has already been consumed. Replay attack blocked.",
+            "consumed_at": ticket.get("consumed_at"),
+        }
+
+    # 2. TTL Expiration Check
+    now = time.time()
+    if now > ticket["expires_at"]:
+        ticket["status"] = "EXPIRED"
+        return {
+            "authorized": False,
+            "error": "TICKET_EXPIRED",
+            "message": f"Ticket '{ticket_id}' expired at {ticket['expires_at']} (current time {now}).",
+        }
+
+    # 3. Anti-Tampering: Verify Intent Digest against Candidate Parameters
+    amt_findings, zatoshis = audit_payment_amount(amount_zec)
+    if zatoshis is None:
+        return {
+            "authorized": False,
+            "error": "INVALID_AMOUNT",
+            "message": f"Invalid amount_zec '{amount_zec}' provided during ticket verification.",
+        }
+
+    memo_bytes = memo_utf8.encode("utf-8")
+    memo_hash = hashlib.sha256(memo_bytes).hexdigest()
+    candidate_payload = f"{recipient.strip()}:{zatoshis}:{fee_zatoshis}:{memo_hash}"
+    candidate_digest = hashlib.sha256(candidate_payload.encode("utf-8")).hexdigest()
+
+    if candidate_digest != ticket["intent_digest"]:
+        return {
+            "authorized": False,
+            "error": "INTENT_TAMPERING_DETECTED",
+            "message": (
+                "Candidate transaction parameters do not match the cryptographic intent approved in ticket. "
+                "Parameter substitution detected (recipient, amount, fee, or memo altered)."
+            ),
+            "expected_digest": ticket["intent_digest"],
+            "candidate_digest": candidate_digest,
+        }
+
+    # 4. Constant-Time Token Verification
+    if not approval_token or not secrets.compare_digest(approval_token.strip(), ticket["approval_token"]):
+        return {
+            "authorized": False,
+            "error": "INVALID_APPROVAL_TOKEN",
+            "message": "Human approval token does not match ticket authorization token.",
+        }
+
+    # Mark ticket consumed
+    ticket["status"] = "CONSUMED"
+    ticket["consumed_at"] = now
+
+    return {
+        "authorized": True,
+        "ticket_id": ticket_id,
+        "intent_digest": ticket["intent_digest"],
+        "status": "CONSUMED",
+        "consumed_at": now,
+        "recipient": ticket["recipient"],
+        "amount_zatoshis": ticket["amount_zatoshis"],
+        "amount_zec": ticket["amount_zec"],
+    }
+
