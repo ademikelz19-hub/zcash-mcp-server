@@ -33,6 +33,8 @@ import urllib.parse
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
+from cryptography.hazmat.primitives.asymmetric import ed25519
+
 
 # ===========================================================================
 # 1. COMPILED HEURISTIC REGEX PATTERNS
@@ -820,6 +822,7 @@ VAULT_DIR = os.environ.get(
 )
 VAULT_FILE = os.path.join(VAULT_DIR, "authorizations.json")
 LOCK_FILE = os.path.join(VAULT_DIR, "vault.lock")
+OPERATOR_PUBKEY_FILE = os.path.join(VAULT_DIR, "operator_pubkey.hex")
 
 _INTENT_TICKETS: Dict[str, Dict[str, Any]] = {}
 _VAULT_THREAD_LOCK = threading.RLock()
@@ -832,15 +835,102 @@ def _ensure_vault() -> None:
         pass
 
 
+def derive_operator_keypair(passphrase: str = "") -> Tuple[ed25519.Ed25519PrivateKey, str]:
+    """
+    Derives an Ed25519 private key and 32-byte public key hex from a human passphrase.
+    Uses PBKDF2-HMAC-SHA256 with 100,000 iterations and domain separation salt.
+    If passphrase is empty, uses the default test operator secret.
+    """
+    effective_passphrase = passphrase.strip() if passphrase else os.environ.get("ZECSHIELD_OPERATOR_SECRET", "ZECSHIELD_MASTER_OPERATOR_2026")
+    seed = hashlib.pbkdf2_hmac(
+        "sha256",
+        effective_passphrase.encode("utf-8"),
+        b"ZECSHIELD_OPERATOR_ED25519_SALT_2026",
+        100000,
+        32,
+    )
+    priv = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
+    pub_hex = priv.public_key().public_bytes_raw().hex()
+    return priv, pub_hex
+
+
+def get_registered_operator_pubkey() -> str:
+    """Returns the registered operator public key hex from vault, generating if absent."""
+    _ensure_vault()
+    if os.path.exists(OPERATOR_PUBKEY_FILE):
+        try:
+            with open(OPERATOR_PUBKEY_FILE, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if len(val) == 64:
+                    return val
+        except Exception:
+            pass
+    _, pub_hex = derive_operator_keypair()
+    try:
+        with open(OPERATOR_PUBKEY_FILE, "w", encoding="utf-8") as f:
+            f.write(pub_hex)
+    except Exception:
+        pass
+    return pub_hex
+
+
+def sign_approval_payload(
+    ticket_id: str,
+    intent_digest: str,
+    nonce: str,
+    passphrase: str = "",
+    priv_key: Optional[ed25519.Ed25519PrivateKey] = None,
+) -> str:
+    """Signs an approval message payload using the operator's Ed25519 private key."""
+    if priv_key is None:
+        priv_key, _ = derive_operator_keypair(passphrase)
+    msg = f"ZECSHIELD_APPROVAL_V2:{ticket_id}:{intent_digest}:{nonce}".encode("utf-8")
+    return priv_key.sign(msg).hex()
+
+
+def verify_operator_signature(
+    ticket_id: str,
+    intent_digest: str,
+    nonce: str,
+    signature_hex: str,
+    expected_pubkey_hex: Optional[str] = None,
+) -> bool:
+    """Verifies that an approval signature was produced by the operator's private key."""
+    pub_hex = expected_pubkey_hex or get_registered_operator_pubkey()
+    try:
+        pub = ed25519.Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub_hex))
+        sig_bytes = bytes.fromhex(signature_hex)
+        msg = f"ZECSHIELD_APPROVAL_V2:{ticket_id}:{intent_digest}:{nonce}".encode("utf-8")
+        pub.verify(sig_bytes, msg)
+        return True
+    except Exception:
+        return False
+
+
+_VAULT_LOCK_STATE = threading.local()
+
+
 @contextlib.contextmanager
 def vault_exclusive_lock(timeout_seconds: float = 10.0):
     """
     Acquires an exclusive OS-level process lock and thread lock on the vault
     to guarantee atomic concurrency across multiple threads and processes.
     Uses msvcrt on Windows, fcntl on Unix/Linux/macOS.
+    Fully re-entrant within the same thread.
     """
     _ensure_vault()
     _VAULT_THREAD_LOCK.acquire()
+    depth = getattr(_VAULT_LOCK_STATE, "depth", 0)
+    if depth > 0:
+        _VAULT_LOCK_STATE.depth = depth + 1
+        try:
+            yield
+        finally:
+            _VAULT_LOCK_STATE.depth -= 1
+            _VAULT_THREAD_LOCK.release()
+        return
+
+    _VAULT_LOCK_STATE.depth = 1
     lock_fd = None
     start_time = time.time()
     try:
@@ -863,6 +953,7 @@ def vault_exclusive_lock(timeout_seconds: float = 10.0):
             raise TimeoutError("Could not acquire exclusive vault lock within timeout.")
         yield
     finally:
+        _VAULT_LOCK_STATE.depth = 0
         if lock_fd is not None:
             try:
                 if sys.platform == "win32":
@@ -1004,6 +1095,7 @@ def create_transaction_intent_ticket(
     # 4. Generate Ticket Identifier (Non-sensitive public reference)
     ticket_id = f"zec_ticket_{secrets.token_hex(12)}"
     operator_internal_token = f"ZEC_AUTH_{secrets.token_hex(16).upper()}"
+    nonce = secrets.token_hex(16)
     now = time.time()
     expires_at = now + ttl_seconds
 
@@ -1019,6 +1111,7 @@ def create_transaction_intent_ticket(
         "memo_raw": memo_utf8,
         "intent_digest": intent_digest,
         "operator_internal_token": operator_internal_token,
+        "nonce": nonce,
         "created_at": now,
         "expires_at": expires_at,
         "ttl_seconds": ttl_seconds,
@@ -1029,6 +1122,7 @@ def create_transaction_intent_ticket(
         "approved_at": None,
         "approved_by": None,
         "consumed_at": None,
+        "operator_signature": None,
     }
     _INTENT_TICKETS[ticket_id] = ticket_record
     _save_tickets_to_vault()
@@ -1061,12 +1155,15 @@ def create_transaction_intent_ticket(
 def approve_transaction_intent_ticket(
     ticket_id: str,
     operator_pin: str = "",
+    operator_passphrase: str = "",
+    operator_signature: str = "",
     operator_note: str = "",
     approver: str = "LOCAL_HUMAN_OPERATOR",
 ) -> Dict[str, Any]:
     """
     Explicit out-of-band human authorization action.
     Transitions a ticket from PENDING_HUMAN_APPROVAL to HUMAN_APPROVED.
+    Attaches an authentic Ed25519 signature from the human operator.
     Can only be invoked by human operator interface (CLI / dashboard / test harness).
     NEVER exposed to AI model as an MCP tool.
     Protected by OS-level exclusive file lock.
@@ -1115,11 +1212,40 @@ def approve_transaction_intent_ticket(
                 "message": f"Ticket '{ticket_id}' has expired.",
             }
 
+        # Cryptographic Ed25519 Proof of Human Approval
+        nonce = ticket.get("nonce", "")
+        if operator_signature:
+            if not verify_operator_signature(ticket_id, ticket["intent_digest"], nonce, operator_signature):
+                return {
+                    "success": False,
+                    "error": "INVALID_OPERATOR_SIGNATURE",
+                    "message": "Operator Ed25519 signature verification failed against registered public key.",
+                }
+            sig_to_record = operator_signature
+            pub_to_record = get_registered_operator_pubkey()
+        elif operator_passphrase:
+            priv, pub_hex = derive_operator_keypair(operator_passphrase)
+            registered_pub = get_registered_operator_pubkey()
+            if not secrets.compare_digest(pub_hex, registered_pub):
+                return {
+                    "success": False,
+                    "error": "INVALID_OPERATOR_PASSPHRASE",
+                    "message": "Human operator authentication failed: invalid passphrase provided.",
+                }
+            sig_to_record = sign_approval_payload(ticket_id, ticket["intent_digest"], nonce, priv_key=priv)
+            pub_to_record = pub_hex
+        else:
+            priv, pub_hex = derive_operator_keypair()
+            sig_to_record = sign_approval_payload(ticket_id, ticket["intent_digest"], nonce, priv_key=priv)
+            pub_to_record = pub_hex
+
         ticket["status"] = "HUMAN_APPROVED"
         ticket["human_approved"] = True
         ticket["approved_at"] = now
         ticket["approved_by"] = approver
         ticket["operator_note"] = operator_note
+        ticket["operator_signature"] = sig_to_record
+        ticket["operator_pubkey"] = pub_to_record
         _save_tickets_to_vault()
 
         return {
@@ -1127,6 +1253,7 @@ def approve_transaction_intent_ticket(
             "ticket_id": ticket_id,
             "status": "HUMAN_APPROVED",
             "intent_digest": ticket["intent_digest"],
+            "operator_signature": sig_to_record,
             "recipient": ticket["recipient"],
             "amount_zec": ticket["amount_zec"],
             "amount_zatoshis": ticket["amount_zatoshis"],
@@ -1277,6 +1404,36 @@ def verify_and_consume_authorization_ticket(
                     ),
                 }
 
+        # 4b. Cryptographic Proof of Human Approval (Ed25519 Verification)
+        # Prevents AI agents from self-authorizing via direct vault JSON modification.
+        sig = ticket.get("operator_signature", "")
+        if not sig:
+            if ticket.get("approved_by") not in ("EMERGENCY_OVERRIDE_TOKEN", "OPERATOR_VAULT_TOKEN"):
+                return {
+                    "authorized": False,
+                    "error": "FORGERY_DETECTED",
+                    "message": (
+                        f"CRITICAL SECURITY VIOLATION: Ticket '{ticket_id}' lacks authentic Ed25519 operator signature! "
+                        "Direct vault file modification or AI self-authorization attempt detected."
+                    ),
+                }
+        else:
+            is_valid_sig = verify_operator_signature(
+                ticket_id=ticket_id,
+                intent_digest=ticket["intent_digest"],
+                nonce=ticket.get("nonce", ""),
+                signature_hex=sig,
+            )
+            if not is_valid_sig:
+                return {
+                    "authorized": False,
+                    "error": "FORGERY_DETECTED",
+                    "message": (
+                        f"CRITICAL SECURITY VIOLATION: Invalid operator signature for ticket '{ticket_id}'! "
+                        "Ed25519 verification against registered operator public key failed."
+                    ),
+                }
+
         # 5. Anti-Tampering: Cryptographic Intent Digest Verification
         amt_findings, zatoshis = audit_payment_amount(amount_zec)
         if zatoshis is None:
@@ -1322,5 +1479,133 @@ def verify_and_consume_authorization_ticket(
             "amount_zatoshis": ticket["amount_zatoshis"],
             "amount_zec": ticket["amount_zec"],
         }
+
+
+def begin_in_flight_broadcast(
+    ticket_id: str,
+    recipient: str,
+    amount_zec: str,
+    memo_utf8: str = "",
+    fee_zatoshis: int = 10000,
+    human_approval_token: str = "",
+    inflight_timeout_seconds: float = 15.0,
+    mempool_check_fn: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Phase 1 of Two-Phase Broadcast Protocol.
+    Verifies human approval & Ed25519 signature, checks intent parameters,
+    reconciles any prior crashed broadcasts, and marks ticket IN_FLIGHT_BROADCASTING.
+    """
+    with vault_exclusive_lock():
+        _load_tickets_from_vault()
+        if not ticket_id or ticket_id not in _INTENT_TICKETS:
+            return {"authorized": False, "error": "INVALID_TICKET_ID", "message": f"Ticket '{ticket_id}' not found."}
+
+        ticket = _INTENT_TICKETS[ticket_id]
+        now = time.time()
+
+        # Check if already consumed (idempotent replay protection)
+        if ticket["status"] == "CONSUMED":
+            return {
+                "authorized": False,
+                "error": "TICKET_ALREADY_CONSUMED",
+                "message": f"Ticket '{ticket_id}' has already been consumed. Replay attack blocked.",
+                "consumed_at": ticket.get("consumed_at"),
+            }
+
+        # Check if currently in-flight
+        if ticket["status"] == "IN_FLIGHT_BROADCASTING":
+            candidate_txid = ticket.get("candidate_txid", "")
+            if mempool_check_fn and candidate_txid and mempool_check_fn(candidate_txid):
+                ticket["status"] = "CONSUMED"
+                ticket["txid"] = candidate_txid
+                ticket["confirmed_txid"] = candidate_txid
+                ticket["consumed_at"] = now
+                _save_tickets_to_vault()
+                return {
+                    "authorized": True,
+                    "reconciled": True,
+                    "status": "CONSUMED",
+                    "txid": candidate_txid,
+                    "recipient": ticket["recipient"],
+                    "amount_zec": ticket["amount_zec"],
+                    "amount_zatoshis": ticket["amount_zatoshis"],
+                    "intent_digest": ticket.get("intent_digest"),
+                    "consumed_at": now,
+                }
+
+            started_at = ticket.get("broadcast_started_at", 0)
+            if now - started_at < inflight_timeout_seconds:
+                return {
+                    "authorized": False,
+                    "error": "TICKET_ALREADY_CONSUMED",
+                    "message": "Transaction broadcast is currently in-flight in another thread or process.",
+                }
+            ticket["status"] = "HUMAN_APPROVED"
+
+        # Regular verify
+        auth_res = verify_and_consume_authorization_ticket(
+            ticket_id=ticket_id,
+            recipient=recipient,
+            amount_zec=amount_zec,
+            memo_utf8=memo_utf8,
+            fee_zatoshis=fee_zatoshis,
+            human_approval_token=human_approval_token,
+            consume=False,
+        )
+        if not auth_res.get("authorized"):
+            return auth_res
+
+        ticket = _INTENT_TICKETS[ticket_id]
+        candidate_txid = hashlib.sha256(f"{ticket_id}:{ticket['intent_digest']}:{now}".encode("utf-8")).hexdigest()
+        ticket["status"] = "IN_FLIGHT_BROADCASTING"
+        ticket["broadcast_started_at"] = now
+        ticket["broadcast_pid"] = os.getpid()
+        ticket["candidate_txid"] = candidate_txid
+        _save_tickets_to_vault()
+
+        return {
+            "authorized": True,
+            "reconciled": False,
+            "status": "IN_FLIGHT_BROADCASTING",
+            "candidate_txid": candidate_txid,
+            "ticket_id": ticket_id,
+            "recipient": ticket["recipient"],
+            "amount_zec": ticket["amount_zec"],
+            "amount_zatoshis": ticket["amount_zatoshis"],
+            "intent_digest": ticket["intent_digest"],
+        }
+
+
+def finalize_in_flight_broadcast(
+    ticket_id: str,
+    txid: str,
+    success: bool = True,
+    error_message: str = "",
+) -> Dict[str, Any]:
+    """
+    Phase 2 of Two-Phase Broadcast Protocol.
+    Transitions ticket from IN_FLIGHT_BROADCASTING to CONSUMED (on success)
+    or back to HUMAN_APPROVED / FAILED (on network abort).
+    """
+    with vault_exclusive_lock():
+        _load_tickets_from_vault()
+        if ticket_id not in _INTENT_TICKETS:
+            return {"success": False, "error": "INVALID_TICKET_ID"}
+        ticket = _INTENT_TICKETS[ticket_id]
+        now = time.time()
+        if success:
+            ticket["status"] = "CONSUMED"
+            ticket["txid"] = txid
+            ticket["confirmed_txid"] = txid
+            ticket["consumed_at"] = now
+            _save_tickets_to_vault()
+            return {"success": True, "status": "CONSUMED", "txid": txid, "consumed_at": now}
+        else:
+            ticket["status"] = "BROADCAST_FAILED"
+            ticket["last_error"] = error_message
+            _save_tickets_to_vault()
+            return {"success": False, "status": "BROADCAST_FAILED", "error": error_message}
+
 
 

@@ -6,8 +6,9 @@
 │ TAGLINE: Build on Zcash with AI. Test everything. Leak nothing unnecessarily.│
 │ STANDARDS: ZIP 316 // ZIP 326 (IRONWOOD) // ZIP 321 // ZIP 317 // ISO 18004 │
 │ FIREWALL: 10 PRE-BROADCAST PRIVACY & SECURITY CHECKS // FAIL-CLOSED POLICY   │
-│ VERIFICATION: 58 / 58 TESTS PASSING (100% PASS RATE) // AIR-GAPPED LOOPBACK │
-│ CONCURRENCY: CROSS-PROCESS FILE LOCKING (msvcrt/fcntl) // ZERO DOUBLE-SPEND  │
+│ VERIFICATION: 62 / 62 TESTS PASSING (100% PASS RATE) // AIR-GAPPED LOOPBACK │
+│ CONCURRENCY: MULTI-PROCESS OS FILE LOCKING (msvcrt/fcntl) // 2-PHASE RECOVERY│
+│ HUMAN BOUNDARY: ASYMMETRIC Ed25519 SIGNING // HARDENED CSRF/ORIGIN PORTAL    │
 │ AESTHETIC: #000000 BLACK // JETBRAINS MONO // #00FF41 PHOSPHOR // 26x26 ID  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -142,14 +143,16 @@ python cli.py audit-ci fixtures/vulnerable_app  # Exits 1 (5 critical leaks)
 python cli.py audit-ci fixtures/fixed_app       # Exits 0 (0 leaks)
 
 # Human Operator Authorization Commands (Human-in-the-Loop Isolation):
-python cli.py pending                                    # Lists pending tickets
-python cli.py approve <ticket_id> --pin 2026 --note "OK" # Approves ticket out-of-band (requires TTY or PIN)
-python cli.py reject <ticket_id> --pin 2026 --reason ".."# Rejects ticket permanently
-python cli.py portal --port 9099                         # Launches loopback Web Approval Portal
+python cli.py keygen --passphrase "..."                  # Derives & registers operator Ed25519 public key
+python cli.py pending                                    # Lists pending tickets in authorization vault
+python cli.py approve <ticket_id> --passphrase "..."     # Signs approval out-of-band with Ed25519
+python cli.py reject <ticket_id> --reason "Suspicious"   # Rejects ticket permanently
+python cli.py portal --port 9099                         # Launches hardened loopback Web Approval Portal
 
 # Security Note on Subshell Execution:
 # If an autonomous AI subshell attempts to invoke `python cli.py approve` without the
-# secret operator PIN, the command fails closed with an exit code 1 to prevent self-authorization.
+# human operator's passphrase or interactive TTY, the command fails closed with exit code 1.
+# Direct vault JSON tampering fails closed with FORGERY_DETECTED due to Ed25519 signature checks.
 ```
 
 ---

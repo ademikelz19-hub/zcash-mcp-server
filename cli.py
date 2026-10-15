@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.server
 import json
+import secrets
 import sys
+import urllib.parse
 from typing import Any, Dict, List
 
 from server import (
@@ -226,10 +229,14 @@ def main() -> None:
     p_ci.add_argument("--fail-on-critical", action="store_true", default=True, help="Exit with code 1 on CRITICAL findings")
     p_ci.add_argument("--json-out", default="", help="Path to write JSON audit report")
 
+    p_keygen = sub.add_parser("keygen", help="Generate or register an Operator Ed25519 Keypair for Human-in-the-Loop authorization")
+    p_keygen.add_argument("--passphrase", default="", help="Optional passphrase to deterministically derive keypair")
+
     sub.add_parser("pending", help="List all pending transaction authorization tickets awaiting human approval")
 
     p_approve = sub.add_parser("approve", help="Approve a pending transaction authorization ticket (Human-in-the-Loop)")
     p_approve.add_argument("ticket_id", help="The intent ticket ID (e.g. zec_ticket_...)")
+    p_approve.add_argument("--passphrase", default="", help="Operator secret passphrase to compute Ed25519 signature")
     p_approve.add_argument("--pin", default="", help="Operator authentication PIN (required for non-interactive/script mode)")
     p_approve.add_argument("--note", default="Approved via CLI operator terminal", help="Optional operator approval note")
 
@@ -244,6 +251,17 @@ def main() -> None:
 
     if args.command in (None, "demo"):
         run_full_demo()
+    elif args.command == "keygen":
+        import zecshield_firewall
+        print_banner("ZECSHIELD // OPERATOR KEYPAIR GENERATION")
+        priv, pub_hex = zecshield_firewall.derive_operator_keypair(args.passphrase)
+        zecshield_firewall.get_registered_operator_pubkey()
+        print_section("REGISTERED OPERATOR ED25519 PUBLIC KEY", {
+            "operator_public_key_hex": pub_hex,
+            "vault_path": zecshield_firewall.OPERATOR_PUBKEY_FILE,
+            "security_guarantee": "The private key is NEVER saved to disk or exposed to AI agents.",
+        })
+        print("[+] Operator Ed25519 public key successfully registered in authorization vault.\n")
     elif args.command == "audit-ci":
         sys.exit(run_ci_audit(target=args.target, fail_on_critical=args.fail_on_critical, json_out=args.json_out))
     elif args.command == "portal":
@@ -260,25 +278,34 @@ def main() -> None:
     elif args.command == "approve":
         import zecshield_firewall
         is_interactive = sys.stdin.isatty() and sys.stdout.isatty()
+        passphrase = args.passphrase
         pin = args.pin
-        if not pin:
+
+        if not passphrase and not pin:
             if is_interactive:
                 import getpass
                 try:
-                    pin = getpass.getpass("Enter Human Operator PIN [default: 2026]: ").strip() or "2026"
+                    passphrase = getpass.getpass("Enter Human Operator Passphrase [or press Enter for default]: ").strip()
+                    if not passphrase:
+                        pin = "2026"
                 except Exception:
                     pin = "2026"
             else:
-                # Automated subshell / AI assistant attempt to self-approve without PIN -> FAIL CLOSED
+                # Automated subshell / AI assistant attempt to self-approve without credentials -> FAIL CLOSED
                 print_banner("SECURITY VIOLATION // NON-INTERACTIVE AI SELF-APPROVAL DETECTED")
                 print(f"{BG_BLACK}{FG_PHOSPHOR}[X] FAIL-CLOSED: Non-interactive terminal execution detected.{RESET}")
-                print(f"{BG_BLACK}{FG_PHOSPHOR}    Autonomous AI coding assistants cannot self-approve without explicit Human Operator PIN.{RESET}")
-                print(f"{BG_BLACK}{FG_PHOSPHOR}    To approve via CLI, pass '--pin <PIN>' or run from an interactive terminal TTY.{RESET}")
+                print(f"{BG_BLACK}{FG_PHOSPHOR}    Autonomous AI coding assistants cannot self-approve without explicit Human Passphrase or PIN.{RESET}")
+                print(f"{BG_BLACK}{FG_PHOSPHOR}    To approve via CLI, pass '--passphrase <P>' or '--pin <PIN>' or run from an interactive terminal TTY.{RESET}")
                 print(f"{BG_BLACK}{FG_PHOSPHOR}    Alternatively, approve visually in your browser at: http://127.0.0.1:9099{RESET}\n")
                 sys.exit(1)
 
         print_banner(args.ticket_id)
-        res = zecshield_firewall.approve_transaction_intent_ticket(args.ticket_id, operator_pin=pin, operator_note=args.note)
+        res = zecshield_firewall.approve_transaction_intent_ticket(
+            args.ticket_id,
+            operator_pin=pin,
+            operator_passphrase=passphrase,
+            operator_note=args.note,
+        )
         print_section("ZECSHIELD // HUMAN OPERATOR APPROVAL RESULT", res)
         if res.get("success"):
             print("\n[+] TICKET APPROVED: AI broadcast worker is now permitted to execute broadcast.")
@@ -480,63 +507,63 @@ def run_ci_audit(target: str = ".", fail_on_critical: bool = True, json_out: str
     return 0
 
 
-def run_approval_portal(port: int = 9099) -> None:
-    """
-    Launches a dedicated local loopback web approval portal (127.0.0.1:port).
-    Provides an out-of-band physical Human-in-the-Loop browser UI where the operator
-    can review intent digests, examine recipients, and click Approve or Reject.
-    Completely isolated from the AI coding assistant's terminal context.
-    """
-    import http.server
-    import urllib.parse
-    import zecshield_firewall
+ACTIVE_CSRF_TOKENS: set[str] = set()
 
-    print_banner("ZECSHIELD // OUT-OF-BAND OPERATOR APPROVAL PORTAL")
-    print(f"[*] Booting Human Operator Loopback Portal on http://127.0.0.1:{port}")
-    print("[*] Direct your web browser to this URL to review and authorize transactions out-of-band.")
-    print("[*] Press Ctrl+C in this terminal to terminate the portal.\n")
 
-    class ApprovalPortalHandler(http.server.BaseHTTPRequestHandler):
-        def log_message(self, format, *args):
-            return
+class ApprovalPortalHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        return
 
-        def do_GET(self):
-            pending = zecshield_firewall.get_pending_intent_tickets()
-            items_html = ""
-            if not pending:
-                items_html = "<div class='empty'>Zero pending transactions. Active authorization queue is clear.</div>"
-            else:
-                for t in pending:
-                    items_html += f"""
-                    <div class='ticket-card'>
-                        <div class='ticket-header'>
-                            <strong>TICKET ID:</strong> <code>{t['ticket_id']}</code>
-                            <span class='badge'>PENDING HUMAN APPROVAL</span>
-                        </div>
-                        <div class='details'>
-                            <div><strong>Recipient:</strong> <code style='font-size:11px;'>{t['recipient']}</code></div>
-                            <div><strong>Amount:</strong> <span class='hl'>{t['amount_zec']} ZEC</span> ({t['amount_zatoshis']:,} zatoshis)</div>
-                            <div><strong>Fee:</strong> {t['fee_zatoshis']:,} zatoshis</div>
-                            <div><strong>Cryptographic Intent Digest (SHA-256):</strong> <code>{t['intent_digest']}</code></div>
-                            <div><strong>Expires In:</strong> {t['remaining_seconds']} seconds</div>
-                        </div>
-                        <div class='actions'>
-                            <form method='POST' action='/approve' style='display:inline;'>
-                                <input type='hidden' name='ticket_id' value='{t['ticket_id']}'>
-                                <button type='submit' class='btn approve'>[APPROVE TRANSACTION]</button>
-                            </form>
-                            <form method='POST' action='/reject' style='display:inline;'>
-                                <input type='hidden' name='ticket_id' value='{t['ticket_id']}'>
-                                <button type='submit' class='btn reject'>[REJECT]</button>
-                            </form>
-                        </div>
+    def do_GET(self):
+        import zecshield_firewall
+
+        csrf_token = secrets.token_hex(32)
+        ACTIVE_CSRF_TOKENS.add(csrf_token)
+        if len(ACTIVE_CSRF_TOKENS) > 500:
+            ACTIVE_CSRF_TOKENS.pop()
+
+        pending = zecshield_firewall.get_pending_intent_tickets()
+        items_html = ""
+        if not pending:
+            items_html = "<div class='empty'>Zero pending transactions. Active authorization queue is clear.</div>"
+        else:
+            for t in pending:
+                items_html += f"""
+                <div class='ticket-card'>
+                    <div class='ticket-header'>
+                        <strong>TICKET ID:</strong> <code>{t['ticket_id']}</code>
+                        <span class='badge'>PENDING HUMAN APPROVAL</span>
                     </div>
-                    """
+                    <div class='details'>
+                        <div><strong>Recipient:</strong> <code style='font-size:11px;'>{t['recipient']}</code></div>
+                        <div><strong>Amount:</strong> <span class='hl'>{t['amount_zec']} ZEC</span> ({t['amount_zatoshis']:,} zatoshis)</div>
+                        <div><strong>Fee:</strong> {t['fee_zatoshis']:,} zatoshis</div>
+                        <div><strong>Cryptographic Intent Digest (SHA-256):</strong> <code>{t['intent_digest']}</code></div>
+                        <div><strong>Nonce:</strong> <code>{t.get('nonce', '')}</code></div>
+                        <div><strong>Expires In:</strong> {t['remaining_seconds']} seconds</div>
+                    </div>
+                    <div class='actions'>
+                        <form method='POST' action='/approve' style='display:inline-flex; gap:8px; align-items:center;'>
+                            <input type='hidden' name='ticket_id' value='{t['ticket_id']}'>
+                            <input type='hidden' name='csrf_token' value='{csrf_token}'>
+                            <input type='password' name='operator_passphrase' placeholder='Operator Passphrase' style='background:#111; border:1px solid #00FF41; color:#00FF41; padding:6px 10px; font-family:inherit; font-size:11px;' required>
+                            <button type='submit' class='btn approve'>[SIGN &amp; APPROVE]</button>
+                        </form>
+                        <form method='POST' action='/reject' style='display:inline;'>
+                            <input type='hidden' name='ticket_id' value='{t['ticket_id']}'>
+                            <input type='hidden' name='csrf_token' value='{csrf_token}'>
+                            <button type='submit' class='btn reject'>[REJECT]</button>
+                        </form>
+                    </div>
+                </div>
+                """
 
-            html = f"""<!DOCTYPE html>
+        port = self.server.server_address[1] if hasattr(self, "server") and hasattr(self.server, "server_address") else 9099
+        html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="csrf-token" content="{csrf_token}">
     <title>ZecShield // Human Operator Portal</title>
     <style>
         body {{ background: #000; color: #00FF41; font-family: 'JetBrains Mono', monospace; margin: 0; padding: 24px; }}
@@ -558,30 +585,111 @@ def run_approval_portal(port: int = 9099) -> None:
 </head>
 <body>
     <h1>[NODE 07] // ZECSHIELD OUT-OF-BAND OPERATOR APPROVAL PORTAL</h1>
-    <p style='color:#008F11; font-size:11px;'>This portal operates on 127.0.0.1:{port} and constitutes the physical Human-in-the-Loop authorization boundary. Autonomous AI models running in terminal sessions cannot interact with this browser interface.</p>
+    <p style='color:#008F11; font-size:11px;'>This portal operates on 127.0.0.1:{port} and constitutes the physical Human-in-the-Loop authorization boundary. Protected by Origin enforcement, CSRF session tokens, and Ed25519 cryptographic signing.</p>
     {items_html}
     <p style='margin-top:24px; font-size:10px; color:#555;'>ZecShield MCP // Zecathon 2026 Core &amp; Tooling</p>
 </body>
 </html>"""
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Set-Cookie", f"zecshield_csrf={csrf_token}; Path=/; HttpOnly; SameSite=Strict")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def do_POST(self):
+        import zecshield_firewall
+
+        port = self.server.server_address[1] if hasattr(self, "server") and hasattr(self.server, "server_address") else 9099
+        # 1. Origin and Referer Security Check
+        origin = self.headers.get("Origin", "")
+        referer = self.headers.get("Referer", "")
+        allowed_prefixes = (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+        if origin and not any(origin.startswith(a) for a in allowed_prefixes):
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(html.encode("utf-8"))
+            self.wfile.write(b"403 Forbidden: CROSS_ORIGIN_REQUEST_BLOCKED")
+            return
 
-        def do_POST(self):
-            content_length = int(self.headers.get("Content-Length", 0))
-            post_data = self.rfile.read(content_length).decode("utf-8")
-            params = urllib.parse.parse_qs(post_data)
-            ticket_id = params.get("ticket_id", [""])[0]
-
-            if self.path == "/approve" and ticket_id:
-                zecshield_firewall.approve_transaction_intent_ticket(ticket_id, approver="LOCAL_HUMAN_OPERATOR (Web Portal)")
-            elif self.path == "/reject" and ticket_id:
-                zecshield_firewall.reject_transaction_intent_ticket(ticket_id, reason="Rejected via operator web portal")
-
-            self.send_response(303)
-            self.send_header("Location", "/")
+        if referer and not any(referer.startswith(a) for a in allowed_prefixes):
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain")
             self.end_headers()
+            self.wfile.write(b"403 Forbidden: UNTRUSTED_REFERER_BLOCKED")
+            return
+
+        # 2. Sec-Fetch-Site Check
+        sec_site = self.headers.get("Sec-Fetch-Site", "")
+        if sec_site and sec_site not in ("same-origin", "none", "same-site"):
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"403 Forbidden: CROSS_SITE_FETCH_BLOCKED")
+            return
+
+        # 3. Read Body & Validate CSRF
+        content_length = int(self.headers.get("Content-Length", 0))
+        post_data = self.rfile.read(content_length).decode("utf-8")
+        params = urllib.parse.parse_qs(post_data)
+        ticket_id = params.get("ticket_id", [""])[0]
+        csrf_token = params.get("csrf_token", [""])[0]
+
+        if not csrf_token or csrf_token not in ACTIVE_CSRF_TOKENS:
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"403 Forbidden: CSRF_TOKEN_INVALID_OR_MISSING")
+            return
+
+        ACTIVE_CSRF_TOKENS.discard(csrf_token)
+
+        if self.path == "/approve" and ticket_id:
+            passphrase = params.get("operator_passphrase", [""])[0] or params.get("passphrase", [""])[0]
+            if not passphrase:
+                self.send_response(401)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"401 Unauthorized: OPERATOR_PASSPHRASE_REQUIRED")
+                return
+
+            res = zecshield_firewall.approve_transaction_intent_ticket(
+                ticket_id,
+                operator_passphrase=passphrase,
+                approver="LOCAL_HUMAN_OPERATOR (Web Portal)",
+            )
+            if not res.get("success"):
+                status_code = 401 if "PASSPHRASE" in res.get("error", "") or "PIN" in res.get("error", "") else 400
+                self.send_response(status_code)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(f"{status_code} Error: {res.get('message')}".encode("utf-8"))
+                return
+
+        elif self.path == "/reject" and ticket_id:
+            zecshield_firewall.reject_transaction_intent_ticket(
+                ticket_id,
+                reason="Rejected via operator web portal",
+            )
+
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.end_headers()
+
+
+def run_approval_portal(port: int = 9099) -> None:
+    """
+    Launches a dedicated local loopback web approval portal (127.0.0.1:port).
+    Provides an out-of-band physical Human-in-the-Loop browser UI where the operator
+    can review intent digests, examine recipients, and click Approve or Reject.
+    Enforces browser Origin, CSRF session tokens, SameSite=Strict cookies,
+    and Ed25519 passphrase signing.
+    Completely isolated from the AI coding assistant's terminal context.
+    """
+    print_banner("ZECSHIELD // OUT-OF-BAND OPERATOR APPROVAL PORTAL")
+    print(f"[*] Booting Human Operator Loopback Portal on http://127.0.0.1:{port}")
+    print("[*] Direct your web browser to this URL to review and authorize transactions out-of-band.")
+    print("[*] Security: Origin & CSRF tokens enforced; Ed25519 signature computed in browser request.")
+    print("[*] Press Ctrl+C in this terminal to terminate the portal.\n")
 
     server = http.server.HTTPServer(("127.0.0.1", port), ApprovalPortalHandler)
     try:

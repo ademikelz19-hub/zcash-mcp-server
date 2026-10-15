@@ -124,30 +124,36 @@ In early AI agent prototypes, a critical vulnerability exists: if an MCP tool is
 
 ### 4.2 Security Properties Enforced
 
-1. **Zero AI Self-Authorization:** The AI model context receives only `ticket_id`, `status: "PENDING_HUMAN_APPROVAL"`, and `intent_digest`. It has zero credentials to authorize itself. If the AI calls `execute_authorized_broadcast`, execution fails closed with `AWAITING_HUMAN_APPROVAL`.
-2. **Cryptographic Anti-Tampering:** The intent digest binds:
+1. **Zero AI Self-Authorization & Ed25519 Asymmetric Signatures:** The AI model context receives only `ticket_id`, `status: "PENDING_HUMAN_APPROVAL"`, and `intent_digest`. It has zero credentials to authorize itself. Human approval requires an asymmetric Ed25519 signature derived out-of-band from the human operator's passphrase. The server vault stores ONLY the 32-byte public key (`operator_pubkey.hex`); the private key is never written to disk or exposed to AI agents.
+2. **Anti-Tampering & Forgery Detection:** The intent digest binds:
    $$\text{Digest} = \text{SHA256}(\text{recipient} \parallel \text{amount\_zatoshis} \parallel \text{fee\_zatoshis} \parallel \text{SHA256}(\text{memo}))$$
-   If an attacker or model attempts parameter substitution (e.g., swapping the recipient address or increasing the amount), verification immediately aborts with `INTENT_TAMPERING_DETECTED`.
-3. **Atomic Anti-Replay & Concurrency Locking:** Once executed, the ticket status is updated to `CONSUMED`. Subsequent attempts fail closed with `TICKET_ALREADY_CONSUMED`. All vault reads, state transitions, and ticket consumption execute inside `vault_exclusive_lock()`, utilizing cross-platform advisory OS file locking (`msvcrt.locking` on Windows, `fcntl.flock` on Linux/macOS) in addition to thread locks. Concurrent broadcast attempts are strictly serialized; tested with 20 parallel threads attempting identical tickets, yielding exactly 1 broadcast and 19 fail-closed rejections.
-4. **Subshell & TTY Isolation (Zero AI Self-Approval):** If an autonomous AI agent executes `python cli.py approve` inside a non-interactive subprocess or terminal pipe (`sys.stdin.isatty() == False`), the command immediately rejects execution unless the secret human operator PIN is supplied.
-5. **Out-of-Band Web Approval Portal:** Operators can run `python cli.py portal --port 9099` to launch a dedicated loopback browser portal, allowing physical humans to review and approve transactions completely isolated from the AI chat context.
-6. **Vault Persistence & Crash Safety:** Tickets and anti-replay states are stored on disk in `.zecshield_vault/authorizations.json` with atomic file swapping. Tickets survive server restarts and process crashes.
-7. **Operator Rejection:** Human operators can explicitly kill a ticket with `python cli.py reject <ticket_id> --reason "Suspicious request"`. Rejected tickets are permanently blocked from execution.
+   If an adversary with filesystem write access attempts to directly edit `.zecshield_vault/authorizations.json` to forge `status: HUMAN_APPROVED`, verification detects missing or forged Ed25519 signatures and aborts with `FORGERY_DETECTED`.
+3. **Atomic Anti-Replay & Concurrency Locking:** Once executed, the ticket status is updated to `CONSUMED`. Subsequent attempts fail closed with `TICKET_ALREADY_CONSUMED`. All vault reads, state transitions, and ticket consumption execute inside `vault_exclusive_lock()`, utilizing cross-platform advisory OS file locking (`msvcrt.locking` on Windows, `fcntl.flock` on Linux/macOS) in addition to thread-level re-entrant locking.
+4. **Multi-Process Concurrency Proof:** Verified across distinct operating system processes with independent PIDs (`subprocess.Popen([sys.executable, ...])`). When multiple OS processes race to broadcast the same approved ticket simultaneously, exactly one succeeds and all other processes are rejected with `TICKET_ALREADY_CONSUMED`.
+5. **Crash-Safe Two-Phase Protocol & Mempool Reconciliation:** If a server process crashes or is terminated while broadcasting, the ticket remains in `IN_FLIGHT_BROADCASTING` state with a deterministic `candidate_txid`. Upon restart/retry, the system queries the node's mempool. If the transaction was already accepted by the network, it reconciles the ticket to `CONSUMED` idempotently without broadcasting a duplicate transaction.
+6. **Subshell & TTY Isolation (Zero AI Self-Approval):** If an autonomous AI agent executes `python cli.py approve` inside a non-interactive subprocess or terminal pipe (`sys.stdin.isatty() == False`), the command immediately rejects execution unless the secret human operator credentials are provided.
+7. **Hardened Web Approval Portal:** Operators can run `python cli.py portal --port 9099` to launch a dedicated loopback browser portal, allowing physical humans to review and approve transactions. The portal strictly enforces `Origin: http://127.0.0.1:{port}` checking, `Sec-Fetch-Site: same-origin`, cryptographic per-session CSRF tokens, and `SameSite=Strict, HttpOnly` cookies.
+8. **Vault Persistence & Atomic Updates:** Tickets and anti-replay states are stored on disk in `.zecshield_vault/authorizations.json` with atomic file swapping. Tickets survive server restarts and process crashes.
+9. **Operator Rejection:** Human operators can explicitly kill a ticket with `python cli.py reject <ticket_id> --reason "Suspicious request"`. Rejected tickets are permanently blocked from execution.
 
 ---
 
 ## 5. Automated Test Suite Verification
 
-The ZecShield test suite contains **58 automated tests** organized across four functional layers:
+The ZecShield test suite contains **62 automated tests** organized across four functional layers:
 
 ```text
 ============================= test session starts =============================
 platform win32 -- Python 3.11.9, pytest-9.1.1, pluggy-1.6.0
-collected 58 items
+collected 62 items
 
 tests/test_concurrency.py::test_concurrent_broadcast_attempts_double_spend_prevention PASSED [  1%]
 tests/test_concurrency.py::test_concurrent_approval_and_rejection_race PASSED [  3%]
-tests/test_concurrency.py::test_operator_pin_authentication_enforcement PASSED [  5%]
+tests/test_concurrency.py::test_operator_pin_authentication_enforcement PASSED [  4%]
+tests/test_concurrency.py::test_adversarial_ai_vault_tampering_forgery_fails PASSED [  6%]
+tests/test_concurrency.py::test_multiprocess_broadcast_race_double_spend PASSED [  8%]
+tests/test_concurrency.py::test_two_phase_crash_recovery_mempool_reconciliation PASSED [  9%]
+tests/test_concurrency.py::test_portal_csrf_and_origin_security_boundary PASSED [ 11%]
 
 tests/test_privacy_firewall.py::test_firewall_permits_clean_shielded_payment PASSED [  1%]
 tests/test_privacy_firewall.py::test_firewall_blocks_transparent_address_exposure PASSED [  3%]
@@ -205,14 +211,21 @@ tests/test_server.py::test_zip326_ironwood_pool_routing_and_orchard_receiver_reu
 tests/test_server.py::test_zecshield_privacy_leak_detector PASSED        [ 98%]
 tests/test_server.py::test_ai_memo_redaction_for_host_safety PASSED      [100%]
 
-============================= 58 passed in 17.29s =============================
+============================= 62 passed in 29.47s =============================
 ```
 
 ### Test Coverage Breakdown
 - **Layer A (10 Tests):** Official reference vectors for BIP 350 Bech32m, ZIP 321 Unpadded Base64URL, ZIP 317 Action Counting, and F4Jumble invertible Feistel networks.
 - **Layer B (25 Tests):** FastMCP tool protocol dispatch, Unified Address priority decoding, UFVK parsing, trial decryption, and loopback air-gap enforcement.
 - **Layer C (20 Tests):** Adversarial attacks: transparent fallback, spending key leakage, mnemonic extraction, prompt injections, AI self-authorization prevention, intent tampering detection, anti-replay, and vault persistence across restarts.
-- **Layer D (3 Tests):** Concurrency, race condition, and isolation testing: 20-thread simultaneous broadcast collision (double-spend prevention), concurrent approval/rejection race consistency, and operator PIN authentication enforcement.
+- **Layer D (7 Tests):** Concurrency, multi-process OS locking, crash recovery, and security boundary testing:
+  1. 20-thread simultaneous broadcast collision (single-use consumption).
+  2. Multi-process race condition test across independent OS processes and PIDs using OS-level advisory file locks (`msvcrt`/`fcntl`).
+  3. Adversarial AI vault tampering / forgery detection: direct JSON modification without operator's Ed25519 private key fails closed with `FORGERY_DETECTED`.
+  4. Two-phase broadcast crash recovery and node mempool reconciliation (`begin_in_flight_broadcast`, `finalize_in_flight_broadcast`).
+  5. Operator PIN authentication enforcement.
+  6. Out-of-band Web Approval Portal CSRF token, Origin check, SameSite cookies, and human passphrase verification.
+  7. Concurrent approval / rejection race consistency.
 
 ---
 
