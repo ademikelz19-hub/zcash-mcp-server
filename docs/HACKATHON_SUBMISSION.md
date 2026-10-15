@@ -41,6 +41,6 @@ ZecShield MCP is an AI-native development and privacy-testing toolkit that enabl
 
 ## 4. Verification Evidence
 
-- **47 / 47 passing tests (100% pass rate)** across Unit, Reference Vectors, and Adversarial Privacy suites.
+- **58 / 58 passing tests (100% pass rate)** across Unit, Reference Vectors, Adversarial Privacy, and Concurrency suites.
 - Negative and positive verification fixtures in CI.
 - Brutalist dark developer dashboard (`dashboard.html`) with interactive Privacy Firewall Lab.
