@@ -532,9 +532,11 @@
           </p>
 
           <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
-            <button class="btn-terminal" onclick="generateClientIntentTicket()">[1. REQUEST INTENT TICKET]</button>
-            <button class="btn-terminal" onclick="simulateTicketTampering()" id="btnTamper" style="border-color:var(--alert-warning); color:var(--alert-warning); display:none;">[2. ATTACK: TAMPER RECIPIENT/AMOUNT]</button>
-            <button class="btn-terminal" onclick="executeClientBroadcast()" id="btnBroadcast" style="border-color:var(--fg-phosphor-bright); display:none;">[3. SIGN &amp; BROADCAST]</button>
+            <button class="btn-terminal" onclick="generateClientIntentTicket()">[1. AI: REQUEST INTENT TICKET]</button>
+            <button class="btn-terminal" onclick="approveClientTicket()" id="btnApprove" style="border-color:var(--fg-phosphor-bright); color:var(--fg-phosphor-bright); display:none;">[2. HUMAN OPERATOR: APPROVE]</button>
+            <button class="btn-terminal" onclick="rejectClientTicket()" id="btnReject" style="border-color:var(--alert-critical); color:var(--alert-critical); display:none;">[3. HUMAN OPERATOR: REJECT]</button>
+            <button class="btn-terminal" onclick="simulateTicketTampering()" id="btnTamper" style="border-color:var(--alert-warning); color:var(--alert-warning); display:none;">[4. ATTACK: TAMPER RECIPIENT/AMOUNT]</button>
+            <button class="btn-terminal" onclick="executeClientBroadcast()" id="btnBroadcast" style="border-color:#FFF; display:none;">[5. EXECUTE BROADCAST]</button>
           </div>
 
           <div id="intentTicketDisplay" style="display:none;" class="finding-card passed">
@@ -548,10 +550,11 @@
 
             <div style="margin-top:10px; font-size:11px; line-height:1.6;">
               <div><strong>CRYPTOGRAPHIC INTENT DIGEST (SHA-256):</strong> <code id="intentDigestVal" style="color:var(--fg-phosphor-bright);"></code></div>
-              <div><strong>HUMAN APPROVAL TOKEN:</strong> <code id="approvalTokenVal" style="color:var(--alert-warning);"></code></div>
+              <div><strong>HUMAN APPROVAL BOUNDARY:</strong> <span id="approvalBoundaryVal" style="color:var(--alert-warning);">AWAITING OUT-OF-BAND OPERATOR APPROVAL (cli: python cli.py approve)</span></div>
               <div><strong>BOUND RECIPIENT:</strong> <span id="boundRecipientVal" style="word-break:break-all;"></span></div>
               <div><strong>BOUND AMOUNT:</strong> <span id="boundAmountVal"></span> &bull; <strong>CONVENTIONAL FEE:</strong> <span id="boundFeeVal">10,000 zatoshis</span></div>
               <div><strong>MODEL MEMO SANITIZATION:</strong> <span style="color:var(--fg-phosphor-dim);">[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]</span></div>
+              <div><strong>OPERATOR NOTE / AUDIT:</strong> <span id="operatorNoteVal" style="color:var(--fg-phosphor-dim);">Pending operator action</span></div>
               <div><strong>TTL EXPIRATION:</strong> <span id="ticketExpiryVal">300 seconds</span></div>
             </div>
 
@@ -1078,7 +1081,6 @@ $ curl -s -X POST -H "Content-Type: application/json" \
 
       const hexRand = () => Math.random().toString(16).substring(2, 10);
       const ticketId = `zec_ticket_${hexRand()}${hexRand()}`;
-      const approvalToken = `ZEC_AUTH_${hexRand().toUpperCase()}${hexRand().toUpperCase()}`;
       const memoHash = pseudoHash(lastAuditResult.memo);
       const zatoshis = Math.round(parseFloat(lastAuditResult.amount || "0") * 100000000);
       const digestPayload = `${lastAuditResult.addr}:${zatoshis}:10000:${memoHash}`;
@@ -1086,7 +1088,6 @@ $ curl -s -X POST -H "Content-Type: application/json" \
 
       clientActiveTicket = {
         ticket_id: ticketId,
-        approval_token: approvalToken,
         intent_digest: intentDigest,
         recipient: lastAuditResult.addr,
         amount_zec: lastAuditResult.amount,
@@ -1098,16 +1099,49 @@ $ curl -s -X POST -H "Content-Type: application/json" \
       };
 
       document.getElementById("intentTicketDisplay").style.display = "block";
+      document.getElementById("btnApprove").style.display = "inline-block";
+      document.getElementById("btnReject").style.display = "inline-block";
       document.getElementById("btnTamper").style.display = "inline-block";
       document.getElementById("btnBroadcast").style.display = "inline-block";
       document.getElementById("ticketIdVal").textContent = ticketId;
       document.getElementById("intentDigestVal").textContent = intentDigest;
-      document.getElementById("approvalTokenVal").textContent = approvalToken;
+      document.getElementById("approvalBoundaryVal").textContent = "PENDING HUMAN OPERATOR APPROVAL (Zero AI self-spend)";
+      document.getElementById("approvalBoundaryVal").style.color = "var(--alert-warning)";
+      document.getElementById("operatorNoteVal").textContent = "Awaiting review. Click [2. HUMAN OPERATOR: APPROVE] or run 'python cli.py approve " + ticketId + "'";
       document.getElementById("boundRecipientVal").textContent = lastAuditResult.addr;
       document.getElementById("boundAmountVal").textContent = `${lastAuditResult.amount} ZEC (${zatoshis.toLocaleString()} zatoshis)`;
       document.getElementById("ticketStatusBadge").textContent = "STATUS: PENDING_HUMAN_APPROVAL";
       document.getElementById("ticketStatusBadge").className = "badge badge-solid";
       document.getElementById("broadcastResultBox").style.display = "none";
+    }
+
+    function approveClientTicket() {
+      if (!clientActiveTicket) return;
+      if (clientActiveTicket.status === "CONSUMED") {
+        alert("FAIL-CLOSED: Cannot approve an already consumed ticket.");
+        return;
+      }
+      clientActiveTicket.status = "HUMAN_APPROVED";
+      clientActiveTicket.approved_by = "LOCAL_HUMAN_OPERATOR (Interactive Dashboard)";
+      clientActiveTicket.approved_at = new Date().toISOString();
+
+      document.getElementById("ticketStatusBadge").textContent = "STATUS: HUMAN_APPROVED";
+      document.getElementById("ticketStatusBadge").className = "badge badge-solid";
+      document.getElementById("approvalBoundaryVal").textContent = "APPROVED BY OPERATOR (Out-of-band verified)";
+      document.getElementById("approvalBoundaryVal").style.color = "var(--fg-phosphor-bright)";
+      document.getElementById("operatorNoteVal").textContent = "Human review verified parameters. Ready for broadcast worker execution.";
+      alert(`[HUMAN-IN-THE-LOOP AUTHORIZED]\nTicket ${clientActiveTicket.ticket_id} has been approved by human operator.\nThe AI broadcast worker is now permitted to execute broadcast.`);
+    }
+
+    function rejectClientTicket() {
+      if (!clientActiveTicket) return;
+      clientActiveTicket.status = "REJECTED";
+      document.getElementById("ticketStatusBadge").textContent = "STATUS: REJECTED";
+      document.getElementById("ticketStatusBadge").className = "badge";
+      document.getElementById("approvalBoundaryVal").textContent = "REJECTED BY OPERATOR (Execution permanently blocked)";
+      document.getElementById("approvalBoundaryVal").style.color = "var(--alert-critical)";
+      document.getElementById("operatorNoteVal").textContent = "Operator aborted proposal. Broadcast calls will fail closed.";
+      alert(`[HUMAN OPERATOR REJECTED]\nTicket ${clientActiveTicket.ticket_id} has been marked REJECTED. Any broadcast execution attempt will fail closed.`);
     }
 
     function simulateTicketTampering() {
@@ -1116,7 +1150,7 @@ $ curl -s -X POST -H "Content-Type: application/json" \
       const origAmt = parseFloat(clientActiveTicket.amount_zec);
       const tamperedAmt = (origAmt * 10).toFixed(4);
       document.getElementById("fwAmount").value = tamperedAmt;
-      alert(`[ATTACK SIMULATION] AI Assistant or hostile actor substituted transaction amount: ${origAmt} ZEC -> ${tamperedAmt} ZEC. Now click [3. SIGN & BROADCAST] to observe fail-closed tampering detection.`);
+      alert(`[ATTACK SIMULATION] AI Assistant or hostile actor substituted transaction amount: ${origAmt} ZEC -> ${tamperedAmt} ZEC. Now click [5. EXECUTE BROADCAST] to observe fail-closed tampering detection.`);
     }
 
     function executeClientBroadcast() {
@@ -1128,13 +1162,34 @@ $ curl -s -X POST -H "Content-Type: application/json" \
       if (clientActiveTicket.status === "CONSUMED") {
         resBox.style.borderColor = "var(--alert-critical)";
         resBox.innerHTML = `
-          <strong style="color:var(--alert-critical);">[REPLAY ATTACK BLOCKED]</strong><br/>
-          Ticket <code>${clientActiveTicket.ticket_id}</code> was already consumed at block sequence ${clientActiveTicket.consumed_at}. Single-use cryptographic tickets cannot be replayed.
+          <strong style="color:var(--alert-critical);">[REPLAY ATTACK BLOCKED // FAIL-CLOSED]</strong><br/>
+          Ticket <code>${clientActiveTicket.ticket_id}</code> was already consumed at ${clientActiveTicket.consumed_at}. Single-use cryptographic tickets cannot be replayed.
         `;
         return;
       }
 
-      // 2. Anti-Tampering check against live input fields
+      // 2. Rejection check
+      if (clientActiveTicket.status === "REJECTED") {
+        resBox.style.borderColor = "var(--alert-critical)";
+        resBox.innerHTML = `
+          <strong style="color:var(--alert-critical);">[EXECUTION REJECTED // FAIL-CLOSED]</strong><br/>
+          Ticket <code>${clientActiveTicket.ticket_id}</code> was explicitly rejected by the human operator. Broadcast blocked.
+        `;
+        return;
+      }
+
+      // 3. Human Authorization boundary check (FAIL-CLOSED)
+      if (clientActiveTicket.status !== "HUMAN_APPROVED") {
+        resBox.style.borderColor = "var(--alert-critical)";
+        resBox.innerHTML = `
+          <strong style="color:var(--alert-critical);">[FAIL-CLOSED: AWAITING_HUMAN_APPROVAL]</strong><br/>
+          AI models cannot self-authorize financial operations. Transaction ticket <code>${clientActiveTicket.ticket_id}</code> has NOT been approved by an out-of-band human operator.<br/>
+          <span style="color:var(--alert-warning);">&bull; Operator Action Required: Click [2. HUMAN OPERATOR: APPROVE] or execute 'python cli.py approve ${clientActiveTicket.ticket_id}'</span>
+        `;
+        return;
+      }
+
+      // 4. Anti-Tampering check against live input fields
       const currentAddr = document.getElementById("fwAddress").value.trim();
       const currentAmt = document.getElementById("fwAmount").value.trim();
       const currentMemo = document.getElementById("fwMemo").value.trim();
@@ -1148,10 +1203,10 @@ $ curl -s -X POST -H "Content-Type: application/json" \
         resBox.style.borderColor = "var(--alert-critical)";
         resBox.innerHTML = `
           <strong style="color:var(--alert-critical);">[INTENT TAMPERING DETECTED // FAIL-CLOSED]</strong><br/>
-          Candidate broadcast parameters do NOT match the cryptographic intent approved in ticket!<br/>
+          Candidate broadcast parameters do NOT match the cryptographic intent approved by the human operator!<br/>
           &bull; Approved Intent Digest: <code>${clientActiveTicket.intent_digest}</code><br/>
           &bull; Candidate Digest: <code>${candidateDigest}</code><br/>
-          <span style="color:var(--alert-warning);">Substitution attack prevented. Broadcast aborted.</span>
+          <span style="color:var(--alert-warning);">Parameter substitution attack prevented. Broadcast aborted.</span>
         `;
         return;
       }
@@ -1171,7 +1226,7 @@ $ curl -s -X POST -H "Content-Type: application/json" \
         &bull; Transaction ID: <code style="color:var(--fg-phosphor-bright);">${txid}</code><br/>
         &bull; Data Provenance: <span class="badge badge-solid">SIMULATED_MOCK_REGTEST</span><br/>
         &bull; Consumed Ticket: <code>${clientActiveTicket.ticket_id}</code><br/>
-        &bull; Authorization Token: <span style="color:var(--alert-warning);">${clientActiveTicket.approval_token}</span> (VERIFIED)
+        &bull; Approved By: <span style="color:var(--fg-phosphor-bright);">${clientActiveTicket.approved_by}</span> (VERIFIED)
       `;
     }
 

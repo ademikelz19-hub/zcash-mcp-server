@@ -211,7 +211,7 @@ def test_sanitize_ai_memo_guarantee() -> None:
 
 
 def test_intent_ticket_lifecycle_and_tampering_prevention() -> None:
-    """LAYER C // TEST 13: Cryptographic Intent Ticket binds parameters and blocks substitution & replay attacks."""
+    """LAYER C // TEST 13: Cryptographic Intent Ticket binds parameters and blocks AI self-authorization, substitution & replay attacks."""
     ticket = request_transaction_intent(
         recipient=DEFAULT_TREASURY_UA,
         amount_zec="12.5",
@@ -223,9 +223,27 @@ def test_intent_ticket_lifecycle_and_tampering_prevention() -> None:
     assert ticket["authorized"] is False
     assert ticket["decision"] == "PASS"
     ticket_id = ticket["ticket_id"]
-    approval_token = ticket["approval_token"]
     assert ticket_id.startswith("zec_ticket_")
-    assert approval_token.startswith("ZEC_AUTH_")
+    
+    # CRITICAL SECURITY INVARIANT: The AI agent model context receives ZERO approval credentials
+    assert "approval_token" not in ticket
+    assert ticket["requires_action"] == "OUT_OF_BAND_HUMAN_APPROVAL"
+
+    # Attack Vector 0: AI Self-Authorization attempt (Calling broadcast before human approves)
+    ai_unauth = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="12.5",
+        memo_utf8="Security audit payout for Core & Tooling",
+        fee_zatoshis=10000,
+    )
+    assert ai_unauth["status"] == "BROADCAST_REJECTED"
+    assert ai_unauth["error"] == "AWAITING_HUMAN_APPROVAL"
+
+    # Out-of-band Human Operator Review & Approval (via CLI / Dashboard)
+    approve_res = zecshield_firewall.approve_transaction_intent_ticket(ticket_id, operator_note="Approved by devops")
+    assert approve_res["success"] is True
+    assert approve_res["status"] == "HUMAN_APPROVED"
 
     # Attack Vector 1: Parameter substitution - altered recipient
     tampered_rec = execute_authorized_broadcast(
@@ -234,7 +252,6 @@ def test_intent_ticket_lifecycle_and_tampering_prevention() -> None:
         amount_zec="12.5",
         memo_utf8="Security audit payout for Core & Tooling",
         fee_zatoshis=10000,
-        human_approval_token=approval_token,
     )
     assert tampered_rec["status"] == "BROADCAST_REJECTED"
     assert tampered_rec["error"] == "INTENT_TAMPERING_DETECTED"
@@ -246,7 +263,6 @@ def test_intent_ticket_lifecycle_and_tampering_prevention() -> None:
         amount_zec="1250.0",
         memo_utf8="Security audit payout for Core & Tooling",
         fee_zatoshis=10000,
-        human_approval_token=approval_token,
     )
     assert tampered_amt["status"] == "BROADCAST_REJECTED"
     assert tampered_amt["error"] == "INTENT_TAMPERING_DETECTED"
@@ -258,44 +274,29 @@ def test_intent_ticket_lifecycle_and_tampering_prevention() -> None:
         amount_zec="12.5",
         memo_utf8="Attacker altered memo",
         fee_zatoshis=10000,
-        human_approval_token=approval_token,
     )
     assert tampered_memo["status"] == "BROADCAST_REJECTED"
     assert tampered_memo["error"] == "INTENT_TAMPERING_DETECTED"
 
-    # Attack Vector 4: Forged authorization token
-    forged_token = execute_authorized_broadcast(
-        ticket_id=ticket_id,
-        recipient=DEFAULT_TREASURY_UA,
-        amount_zec="12.5",
-        memo_utf8="Security audit payout for Core & Tooling",
-        fee_zatoshis=10000,
-        human_approval_token="ZEC_AUTH_FORGED_HACKER_TOKEN_9999",
-    )
-    assert forged_token["status"] == "BROADCAST_REJECTED"
-    assert forged_token["error"] == "INVALID_APPROVAL_TOKEN"
-
-    # Honest execution: Exact parameter match + valid token -> Broadcast succeeds
+    # Honest execution: Exact parameter match matching human-approved intent -> Broadcast succeeds
     honest_res = execute_authorized_broadcast(
         ticket_id=ticket_id,
         recipient=DEFAULT_TREASURY_UA,
         amount_zec="12.5",
         memo_utf8="Security audit payout for Core & Tooling",
         fee_zatoshis=10000,
-        human_approval_token=approval_token,
     )
     assert honest_res["status"] == "BROADCAST_EXECUTED"
     assert honest_res["authorized"] is True
     assert len(honest_res["txid"]) == 64
 
-    # Attack Vector 5: Anti-Replay - Replaying consumed ticket fails closed
+    # Attack Vector 4: Anti-Replay - Replaying consumed ticket fails closed
     replay_res = execute_authorized_broadcast(
         ticket_id=ticket_id,
         recipient=DEFAULT_TREASURY_UA,
         amount_zec="12.5",
         memo_utf8="Security audit payout for Core & Tooling",
         fee_zatoshis=10000,
-        human_approval_token=approval_token,
     )
     assert replay_res["status"] == "BROADCAST_REJECTED"
     assert replay_res["error"] == "TICKET_ALREADY_CONSUMED"
@@ -311,7 +312,8 @@ def test_intent_ticket_expiration_protection() -> None:
         ttl_seconds=1,
     )
     ticket_id = ticket["ticket_id"]
-    token = ticket["approval_token"]
+    # Human operator approves
+    zecshield_firewall.approve_transaction_intent_ticket(ticket_id)
     time.sleep(1.1)
 
     exp_res = execute_authorized_broadcast(
@@ -319,7 +321,6 @@ def test_intent_ticket_expiration_protection() -> None:
         recipient=DEFAULT_TREASURY_UA,
         amount_zec="1.0",
         memo_utf8="Quick TTL test",
-        human_approval_token=token,
     )
     assert exp_res["status"] == "BROADCAST_REJECTED"
     assert exp_res["error"] == "TICKET_EXPIRED"
@@ -382,21 +383,118 @@ def test_firewall_decision_triad_pass_warn_block() -> None:
 
 
 def test_state_mutation_via_intent_ticket_in_firewall_audit() -> None:
-    """LAYER C // TEST 17: Firewall audit accepts intent_ticket_id + approval_token for state-changing calls."""
+    """LAYER C // TEST 17: Firewall audit accepts human-approved intent_ticket_id for state-changing calls."""
     ticket = request_transaction_intent(
         recipient=DEFAULT_TREASURY_UA,
         amount_zec="3.0",
         memo_utf8="Firewall ticket integration test",
     )
-    # Using the valid ticket in audit_transaction_privacy passes Check 09
+    # Human approves out-of-band
+    zecshield_firewall.approve_transaction_intent_ticket(ticket["ticket_id"])
+
+    # Using the approved ticket in audit_transaction_privacy passes Check 09
     audit_res = audit_transaction_privacy(
         address=DEFAULT_TREASURY_UA,
         amount_zec="3.0",
         memo_utf8="Firewall ticket integration test",
         is_state_changing=True,
         intent_ticket_id=ticket["ticket_id"],
-        human_approval_token=ticket["approval_token"],
     )
     assert audit_res["is_safe_to_broadcast"] is True
     assert "ZEC-AUTH-001" not in [f["id"] for f in audit_res["findings"]]
+
+
+def test_ai_cannot_self_authorize_without_human_approval() -> None:
+    """LAYER C // TEST 18: Adversarial Test - AI agent cannot self-authorize financial transactions."""
+    ticket = request_transaction_intent(
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="7.5",
+        memo_utf8="Adversarial agent self-spend attempt",
+    )
+    ticket_id = ticket["ticket_id"]
+    
+    # AI attempts immediate broadcast with no approval
+    unapproved = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="7.5",
+        memo_utf8="Adversarial agent self-spend attempt",
+    )
+    assert unapproved["status"] == "BROADCAST_REJECTED"
+    assert unapproved["error"] == "AWAITING_HUMAN_APPROVAL"
+
+    # AI attempts to pass forged or hallucinated approval tokens
+    forged = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="7.5",
+        memo_utf8="Adversarial agent self-spend attempt",
+        human_approval_token="FORGED_TOKEN_ATTEMPT",
+    )
+    assert forged["status"] == "BROADCAST_REJECTED"
+    assert forged["error"] == "AWAITING_HUMAN_APPROVAL"
+
+
+def test_operator_rejection_blocks_broadcast_permanently() -> None:
+    """LAYER C // TEST 19: Explicit human operator rejection permanently kills the intent ticket."""
+    ticket = request_transaction_intent(
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="2.0",
+        memo_utf8="Questionable transaction proposal",
+    )
+    ticket_id = ticket["ticket_id"]
+
+    # Operator explicitly rejects via CLI
+    rej_res = zecshield_firewall.reject_transaction_intent_ticket(ticket_id, reason="Untrusted recipient proposal")
+    assert rej_res["success"] is True
+    assert rej_res["status"] == "REJECTED"
+
+    # AI attempt to execute rejected ticket fails closed
+    exec_res = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="2.0",
+        memo_utf8="Questionable transaction proposal",
+    )
+    assert exec_res["status"] == "BROADCAST_REJECTED"
+    assert exec_res["error"] == "TICKET_REJECTED"
+
+
+def test_intent_vault_persistence_across_process_reset() -> None:
+    """LAYER C // TEST 20: Intent tickets and anti-replay state survive in-memory cache clear via vault file."""
+    ticket = request_transaction_intent(
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="4.2",
+        memo_utf8="Persistent vault transaction test",
+    )
+    ticket_id = ticket["ticket_id"]
+    zecshield_firewall.approve_transaction_intent_ticket(ticket_id, operator_note="Pre-reset approval")
+
+    # Simulate process termination & restart by clearing memory dictionary
+    zecshield_firewall._INTENT_TICKETS.clear()
+    assert ticket_id not in zecshield_firewall._INTENT_TICKETS
+
+    # Broadcast reloads from disk vault and executes
+    honest_res = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="4.2",
+        memo_utf8="Persistent vault transaction test",
+    )
+    assert honest_res["status"] == "BROADCAST_EXECUTED"
+    assert honest_res["authorized"] is True
+
+    # Clear memory dictionary again to simulate another restart
+    zecshield_firewall._INTENT_TICKETS.clear()
+
+    # Replay attempt fails because consumed state was persisted to disk vault
+    replay_res = execute_authorized_broadcast(
+        ticket_id=ticket_id,
+        recipient=DEFAULT_TREASURY_UA,
+        amount_zec="4.2",
+        memo_utf8="Persistent vault transaction test",
+    )
+    assert replay_res["status"] == "BROADCAST_REJECTED"
+    assert replay_res["error"] == "TICKET_ALREADY_CONSUMED"
+
 

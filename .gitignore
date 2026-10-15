@@ -46,3 +46,8 @@ htmlcov/
 *~
 .DS_Store
 Thumbs.db
+
+# ZecShield Vault & CI Reports
+.zecshield_vault/
+audit-report.json
+

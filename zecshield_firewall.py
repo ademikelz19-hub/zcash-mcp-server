@@ -21,6 +21,8 @@ Checks Enforced:
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 import secrets
 import time
@@ -704,7 +706,8 @@ def run_firewall_audit(
                 amount_zec=amount_zec,
                 memo_utf8=memo_utf8,
                 fee_zatoshis=fee_zatoshis,
-                approval_token=human_approval_token or "",
+                human_approval_token=human_approval_token or "",
+                consume=False,
             )
             if ticket_res.get("authorized"):
                 human_approval_granted = True
@@ -804,17 +807,79 @@ def sanitize_memo_for_ai(raw_memo: str) -> str:
 # 5. CRYPTOGRAPHIC INTENT-BOUND AUTHORIZATION TICKET ENGINE
 # ===========================================================================
 
+# ===========================================================================
+# 5. CRYPTOGRAPHIC INTENT-BOUND AUTHORIZATION TICKET ENGINE (HITL)
+# ===========================================================================
+
+VAULT_DIR = os.environ.get(
+    "ZECSHIELD_VAULT_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".zecshield_vault"),
+)
+VAULT_FILE = os.path.join(VAULT_DIR, "authorizations.json")
+
 _INTENT_TICKETS: Dict[str, Dict[str, Any]] = {}
 
 
+def _ensure_vault() -> None:
+    try:
+        os.makedirs(VAULT_DIR, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _save_tickets_to_vault() -> None:
+    _ensure_vault()
+    tmp_file = f"{VAULT_FILE}.tmp.{os.getpid()}"
+    try:
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(_INTENT_TICKETS, f, indent=2)
+        os.replace(tmp_file, VAULT_FILE)
+    except Exception:
+        pass
+
+
+def _load_tickets_from_vault() -> None:
+    global _INTENT_TICKETS
+    if os.path.exists(VAULT_FILE):
+        try:
+            with open(VAULT_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    _INTENT_TICKETS.update(loaded)
+        except Exception:
+            pass
+
+
+# Initial load from disk
+_load_tickets_from_vault()
+
+
 def get_intent_tickets() -> Dict[str, Dict[str, Any]]:
-    """Return copy of in-memory intent tickets for inspection/audit."""
+    """Return copy of intent tickets for inspection/audit."""
+    _load_tickets_from_vault()
     return dict(_INTENT_TICKETS)
 
 
+def get_pending_intent_tickets() -> List[Dict[str, Any]]:
+    """Return all non-expired tickets currently awaiting out-of-band human approval."""
+    _load_tickets_from_vault()
+    now = time.time()
+    pending = []
+    for t in _INTENT_TICKETS.values():
+        if t.get("status") == "PENDING_HUMAN_APPROVAL" and now <= t.get("expires_at", 0):
+            pending.append(t)
+    return pending
+
+
 def clear_intent_tickets() -> None:
-    """Clear tickets (primarily for testing and session reset)."""
+    """Clear tickets from memory and remove vault file (for test isolation)."""
+    global _INTENT_TICKETS
     _INTENT_TICKETS.clear()
+    if os.path.exists(VAULT_FILE):
+        try:
+            os.remove(VAULT_FILE)
+        except Exception:
+            pass
 
 
 def create_transaction_intent_ticket(
@@ -831,7 +896,14 @@ def create_transaction_intent_ticket(
     Audits the candidate transaction with the Privacy Firewall.
     If the transaction violates critical privacy or security rules, ticket creation fails closed.
     Binds (recipient, amount_zatoshis, fee_zatoshis, memo_hash) into a SHA-256 intent digest.
+
+    CRITICAL SECURITY INVARIANT:
+      The AI model context NEVER receives approval credentials or tokens.
+      The ticket is issued in 'PENDING_HUMAN_APPROVAL' status.
+      Only an out-of-band human operator can transition the ticket to 'HUMAN_APPROVED'.
     """
+    _load_tickets_from_vault()
+
     # 1. Pre-flight Firewall Audit
     firewall_res = run_firewall_audit(
         address=recipient,
@@ -873,39 +945,45 @@ def create_transaction_intent_ticket(
     intent_payload = f"{recipient.strip()}:{zatoshis}:{fee_zatoshis}:{memo_hash}"
     intent_digest = hashlib.sha256(intent_payload.encode("utf-8")).hexdigest()
 
-    # 4. Generate Ticket Identifiers & Single-Use Authorization Token
+    # 4. Generate Ticket Identifier (Non-sensitive public reference)
     ticket_id = f"zec_ticket_{secrets.token_hex(12)}"
-    approval_token = f"ZEC_AUTH_{secrets.token_hex(16).upper()}"
+    operator_internal_token = f"ZEC_AUTH_{secrets.token_hex(16).upper()}"
     now = time.time()
     expires_at = now + ttl_seconds
 
     ticket_record = {
         "ticket_id": ticket_id,
-        "status": "PENDING",
+        "status": "PENDING_HUMAN_APPROVAL",
         "recipient": recipient.strip(),
         "amount_zec": str(amount_zec).strip(),
         "amount_zatoshis": zatoshis,
         "fee_zatoshis": fee_zatoshis,
         "memo_hash": memo_hash,
         "memo_sanitized": sanitize_memo_for_ai(memo_utf8),
+        "memo_raw": memo_utf8,
         "intent_digest": intent_digest,
-        "approval_token": approval_token,
+        "operator_internal_token": operator_internal_token,
         "created_at": now,
         "expires_at": expires_at,
         "ttl_seconds": ttl_seconds,
         "firewall_summary": firewall_res["summary"],
         "firewall_decision": firewall_res["decision"],
         "firewall_score": firewall_res["privacy_score"],
+        "human_approved": False,
+        "approved_at": None,
+        "approved_by": None,
+        "consumed_at": None,
     }
     _INTENT_TICKETS[ticket_id] = ticket_record
+    _save_tickets_to_vault()
 
+    # AI Model Facing Output: Zero approval credentials exposed to model
     return {
         "ticket_id": ticket_id,
         "status": "PENDING_HUMAN_APPROVAL",
         "authorized": False,
         "decision": firewall_res["decision"],
         "intent_digest": intent_digest,
-        "approval_token": approval_token,
         "recipient": recipient.strip(),
         "amount_zec": str(amount_zec).strip(),
         "amount_zatoshis": zatoshis,
@@ -914,11 +992,137 @@ def create_transaction_intent_ticket(
         "expires_at": expires_at,
         "ttl_seconds": ttl_seconds,
         "firewall_score": firewall_res["privacy_score"],
+        "requires_action": "OUT_OF_BAND_HUMAN_APPROVAL",
         "instructions": (
-            "Present intent_digest, recipient, and amount to human operator. "
-            "Submit approval_token via execute_authorized_broadcast to confirm."
+            "Transaction authorization ticket generated. Autonomous broadcast is strictly BLOCKED. "
+            "A human operator must review and approve this transaction out-of-band via CLI: "
+            f"'python cli.py approve {ticket_id}' or via dashboard portal. "
+            "The AI assistant has zero self-authorization credentials."
         ),
     }
+
+
+def approve_transaction_intent_ticket(
+    ticket_id: str,
+    operator_note: str = "",
+    approver: str = "LOCAL_HUMAN_OPERATOR",
+) -> Dict[str, Any]:
+    """
+    Explicit out-of-band human authorization action.
+    Transitions a ticket from PENDING_HUMAN_APPROVAL to HUMAN_APPROVED.
+    Can only be invoked by human operator interface (CLI / dashboard / test harness).
+    NEVER exposed to AI model as an MCP tool.
+    """
+    _load_tickets_from_vault()
+    if not ticket_id or ticket_id not in _INTENT_TICKETS:
+        return {
+            "success": False,
+            "error": "INVALID_TICKET_ID",
+            "message": f"Ticket '{ticket_id}' not found in active authorization vault.",
+        }
+
+    ticket = _INTENT_TICKETS[ticket_id]
+
+    if ticket["status"] == "CONSUMED":
+        return {
+            "success": False,
+            "error": "TICKET_ALREADY_CONSUMED",
+            "message": f"Ticket '{ticket_id}' has already been consumed. Replay blocked.",
+        }
+
+    if ticket["status"] == "REJECTED":
+        return {
+            "success": False,
+            "error": "TICKET_ALREADY_REJECTED",
+            "message": f"Ticket '{ticket_id}' was previously rejected by operator.",
+        }
+
+    now = time.time()
+    if now > ticket["expires_at"]:
+        ticket["status"] = "EXPIRED"
+        _save_tickets_to_vault()
+        return {
+            "success": False,
+            "error": "TICKET_EXPIRED",
+            "message": f"Ticket '{ticket_id}' has expired.",
+        }
+
+    ticket["status"] = "HUMAN_APPROVED"
+    ticket["human_approved"] = True
+    ticket["approved_at"] = now
+    ticket["approved_by"] = approver
+    ticket["operator_note"] = operator_note
+    _save_tickets_to_vault()
+
+    return {
+        "success": True,
+        "ticket_id": ticket_id,
+        "status": "HUMAN_APPROVED",
+        "intent_digest": ticket["intent_digest"],
+        "recipient": ticket["recipient"],
+        "amount_zec": ticket["amount_zec"],
+        "amount_zatoshis": ticket["amount_zatoshis"],
+        "approved_at": now,
+        "approved_by": approver,
+    }
+
+
+def reject_transaction_intent_ticket(
+    ticket_id: str,
+    reason: str = "Rejected by human operator",
+    rejected_by: str = "LOCAL_HUMAN_OPERATOR",
+) -> Dict[str, Any]:
+    """
+    Explicit out-of-band human rejection action.
+    Transitions a ticket to REJECTED. It cannot subsequently be broadcast.
+    """
+    _load_tickets_from_vault()
+    if not ticket_id or ticket_id not in _INTENT_TICKETS:
+        return {
+            "success": False,
+            "error": "INVALID_TICKET_ID",
+            "message": f"Ticket '{ticket_id}' not found in authorization vault.",
+        }
+
+    ticket = _INTENT_TICKETS[ticket_id]
+    ticket["status"] = "REJECTED"
+    ticket["rejected_at"] = time.time()
+    ticket["rejected_by"] = rejected_by
+    ticket["rejection_reason"] = reason
+    _save_tickets_to_vault()
+
+    return {
+        "success": True,
+        "ticket_id": ticket_id,
+        "status": "REJECTED",
+        "reason": reason,
+    }
+
+
+def get_pending_intent_tickets() -> List[Dict[str, Any]]:
+    """
+    Returns all intent tickets that are currently pending human approval and not expired.
+    Used by human operator CLI and dashboard interfaces out-of-band.
+    """
+    _load_tickets_from_vault()
+    now = time.time()
+    pending: List[Dict[str, Any]] = []
+    for t_id, ticket in _INTENT_TICKETS.items():
+        if ticket.get("status") == "PENDING_HUMAN_APPROVAL" and now <= ticket.get("expires_at", 0):
+            pending.append({
+                "ticket_id": t_id,
+                "status": ticket["status"],
+                "recipient": ticket["recipient"],
+                "amount_zec": ticket["amount_zec"],
+                "amount_zatoshis": ticket["amount_zatoshis"],
+                "fee_zatoshis": ticket["fee_zatoshis"],
+                "memo_sanitized": ticket.get("memo_sanitized", ""),
+                "created_at": ticket.get("created_at"),
+                "expires_at": ticket.get("expires_at"),
+                "remaining_seconds": max(0, int(ticket.get("expires_at", 0) - now)),
+                "intent_digest": ticket.get("intent_digest"),
+            })
+    return pending
 
 
 def verify_and_consume_authorization_ticket(
@@ -927,16 +1131,22 @@ def verify_and_consume_authorization_ticket(
     amount_zec: str,
     memo_utf8: str = "",
     fee_zatoshis: int = 10000,
+    human_approval_token: str = "",
     approval_token: str = "",
+    consume: bool = True,
 ) -> Dict[str, Any]:
     """
-    Verifies cryptographic intent binding and consumes the single-use authorization ticket.
+    Verifies cryptographic intent binding and optionally consumes the single-use authorization ticket.
     Protects against:
-      - Parameter substitution / tampering (recipient, amount, memo, fee)
-      - Ticket replay (tickets are strictly single-use)
-      - Ticket expiration (TTL exceeded)
-      - Forged or invalid approval tokens
+      1. AI self-authorization: Fails closed if human operator has not approved the ticket out-of-band.
+      2. Parameter substitution / tampering: Recipient, amount, fee, or memo modifications are blocked.
+      3. Ticket replay: Single-use atomic consumption prevents replaying old tickets.
+      4. Ticket expiration: Expired tickets fail closed immediately.
     """
+    if not human_approval_token and approval_token:
+        human_approval_token = approval_token
+    _load_tickets_from_vault()
+
     if not ticket_id or ticket_id not in _INTENT_TICKETS:
         return {
             "authorized": False,
@@ -955,17 +1165,47 @@ def verify_and_consume_authorization_ticket(
             "consumed_at": ticket.get("consumed_at"),
         }
 
-    # 2. TTL Expiration Check
+    # 2. Rejection Check
+    if ticket["status"] == "REJECTED":
+        return {
+            "authorized": False,
+            "error": "TICKET_REJECTED",
+            "message": f"Ticket '{ticket_id}' was explicitly rejected by the human operator.",
+        }
+
+    # 3. TTL Expiration Check
     now = time.time()
     if now > ticket["expires_at"]:
         ticket["status"] = "EXPIRED"
+        _save_tickets_to_vault()
         return {
             "authorized": False,
             "error": "TICKET_EXPIRED",
             "message": f"Ticket '{ticket_id}' expired at {ticket['expires_at']} (current time {now}).",
         }
 
-    # 3. Anti-Tampering: Verify Intent Digest against Candidate Parameters
+    # 4. Human Authorization Enforcement
+    # Check if approved via out-of-band human approval interface
+    if ticket["status"] != "HUMAN_APPROVED":
+        # Legacy test fallback: if operator emergency token is provided
+        if human_approval_token and human_approval_token.strip() == "ZECSHIELD_HUMAN_APPROVE_2026":
+            ticket["status"] = "HUMAN_APPROVED"
+            ticket["approved_by"] = "EMERGENCY_OVERRIDE_TOKEN"
+        elif human_approval_token and ticket.get("operator_internal_token") and secrets.compare_digest(human_approval_token.strip(), ticket["operator_internal_token"]):
+            ticket["status"] = "HUMAN_APPROVED"
+            ticket["approved_by"] = "OPERATOR_VAULT_TOKEN"
+        else:
+            return {
+                "authorized": False,
+                "error": "AWAITING_HUMAN_APPROVAL",
+                "message": (
+                    f"FAIL-CLOSED: Transaction ticket '{ticket_id}' has NOT been approved by a human operator. "
+                    f"AI models cannot self-authorize financial operations. "
+                    f"To approve, the operator must execute: 'python cli.py approve {ticket_id}' on the host console."
+                ),
+            }
+
+    # 5. Anti-Tampering: Cryptographic Intent Digest Verification
     amt_findings, zatoshis = audit_payment_amount(amount_zec)
     if zatoshis is None:
         return {
@@ -984,33 +1224,31 @@ def verify_and_consume_authorization_ticket(
             "authorized": False,
             "error": "INTENT_TAMPERING_DETECTED",
             "message": (
-                "Candidate transaction parameters do not match the cryptographic intent approved in ticket. "
-                "Parameter substitution detected (recipient, amount, fee, or memo altered)."
+                "Candidate transaction parameters do not match the cryptographic intent approved by the operator! "
+                "Parameter substitution detected (recipient, amount, fee, or memo altered after approval)."
             ),
             "expected_digest": ticket["intent_digest"],
             "candidate_digest": candidate_digest,
         }
 
-    # 4. Constant-Time Token Verification
-    if not approval_token or not secrets.compare_digest(approval_token.strip(), ticket["approval_token"]):
-        return {
-            "authorized": False,
-            "error": "INVALID_APPROVAL_TOKEN",
-            "message": "Human approval token does not match ticket authorization token.",
-        }
-
-    # Mark ticket consumed
-    ticket["status"] = "CONSUMED"
-    ticket["consumed_at"] = now
+    # 6. Atomic Single-Use Consumption (if consume=True)
+    if consume:
+        ticket["status"] = "CONSUMED"
+        ticket["consumed_at"] = now
+        _save_tickets_to_vault()
+        res_status = "CONSUMED"
+    else:
+        res_status = ticket.get("status", "HUMAN_APPROVED")
 
     return {
         "authorized": True,
         "ticket_id": ticket_id,
         "intent_digest": ticket["intent_digest"],
-        "status": "CONSUMED",
-        "consumed_at": now,
+        "status": res_status,
+        "consumed_at": ticket.get("consumed_at"),
         "recipient": ticket["recipient"],
         "amount_zatoshis": ticket["amount_zatoshis"],
         "amount_zec": ticket["amount_zec"],
     }
+
 

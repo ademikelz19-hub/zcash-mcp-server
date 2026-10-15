@@ -6,7 +6,7 @@
 │ TAGLINE: Build on Zcash with AI. Test everything. Leak nothing unnecessarily.│
 │ STANDARDS: ZIP 316 // ZIP 326 (IRONWOOD) // ZIP 321 // ZIP 317 // ISO 18004 │
 │ FIREWALL: 10 PRE-BROADCAST PRIVACY & SECURITY CHECKS // FAIL-CLOSED POLICY   │
-│ VERIFICATION: 52 / 52 TESTS PASSING (100% PASS RATE) // AIR-GAPPED LOOPBACK │
+│ VERIFICATION: 55 / 55 TESTS PASSING (100% PASS RATE) // AIR-GAPPED LOOPBACK │
 │ AESTHETIC: #000000 BLACK // JETBRAINS MONO // #00FF41 PHOSPHOR // 26x26 ID  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -19,6 +19,7 @@
 
 ## Documentation Index
 
+- [Independent Technical Evidence Report & Audit](docs/EVIDENCE_REPORT.md)
 - [Architecture & Technical Design](docs/ARCHITECTURE.md)
 - [Zcash Foundation Z3 Integration Guide](docs/INTEGRATION_GUIDE.md)
 - [Privacy Firewall & Agent Security Model](docs/SECURITY_MODEL.md)
@@ -138,6 +139,11 @@ python cli.py audit-ci . --fail-on-critical --json-out audit-report.json
 # Test sample fixtures:
 python cli.py audit-ci fixtures/vulnerable_app  # Exits 1 (5 critical leaks)
 python cli.py audit-ci fixtures/fixed_app       # Exits 0 (0 leaks)
+
+# Human Operator Authorization Commands (Human-in-the-Loop):
+python cli.py pending                          # Lists pending tickets
+python cli.py approve <ticket_id> --note "OK"  # Approves ticket out-of-band
+python cli.py reject <ticket_id> --reason ".." # Rejects ticket permanently
 ```
 
 ---
@@ -157,8 +163,8 @@ python cli.py audit-ci fixtures/fixed_app       # Exits 0 (0 leaks)
 
 ### Privacy & Intent-Bound Security
 - `audit_transaction_privacy`: Full 10-check ZecShield Privacy Firewall audit with structured JSON results and Decision Triad (`PASS / WARN / BLOCK`).
-- `request_transaction_intent`: Issues a cryptographically bound single-use Transaction Authorization Ticket (`(recipient, zatoshis, fee, memo_hash) -> SHA-256 digest`) with TTL expiry.
-- `execute_authorized_broadcast`: Consumes an authorization ticket, strictly validates parameter binding (anti-tampering), and enforces anti-replay protection.
+- `request_transaction_intent`: Issues a cryptographically bound single-use Transaction Authorization Ticket (`(recipient, zatoshis, fee, memo_hash) -> SHA-256 digest`) with TTL expiry. The AI assistant receives zero approval credentials.
+- `execute_authorized_broadcast`: Consumes a human-approved authorization ticket, strictly validates parameter binding (anti-tampering), and enforces anti-replay protection.
 - `detect_privacy_leaks`: Pre-broadcast vulnerability scanner.
 - `explain_privacy_violation`: Detailed catalog lookup for finding IDs with remediation code examples.
 - `sanitize_ai_memo`: Scrubs memos for model safety (`[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]`).
@@ -172,7 +178,7 @@ python cli.py audit-ci fixtures/fixed_app       # Exits 0 (0 leaks)
 
 ---
 
-## 05 // Independent Multi-Layer Verification (52 / 52 Passing)
+## 05 // Independent Multi-Layer Verification (55 / 55 Passing)
 
 ```bash
 # Run the complete test suite
@@ -181,64 +187,66 @@ python -m pytest tests/ -v
 
 ```text
 ============================= test session starts =============================
-collected 52 items
+collected 55 items
 
 tests/test_privacy_firewall.py::test_firewall_permits_clean_shielded_payment PASSED [  1%]
 tests/test_privacy_firewall.py::test_firewall_blocks_transparent_address_exposure PASSED [  3%]
 tests/test_privacy_firewall.py::test_firewall_detects_pii_emails_and_ips_in_memos PASSED [  5%]
 tests/test_privacy_firewall.py::test_firewall_blocks_spending_key_leakage PASSED [  7%]
 tests/test_privacy_firewall.py::test_firewall_detects_bip39_seed_phrases PASSED [  9%]
-tests/test_privacy_firewall.py::test_firewall_neutralizes_prompt_injection_attempts PASSED [ 11%]
-tests/test_privacy_firewall.py::test_firewall_detects_viewing_key_in_memo PASSED [ 13%]
-tests/test_privacy_firewall.py::test_firewall_blocks_sub_zatoshi_and_invalid_amounts PASSED [ 15%]
-tests/test_privacy_firewall.py::test_firewall_enforces_loopback_rpc_policy PASSED [ 17%]
-tests/test_privacy_firewall.py::test_firewall_enforces_human_approval_boundary_for_state_changes PASSED [ 19%]
-tests/test_privacy_firewall.py::test_explain_privacy_violation_catalog PASSED [ 21%]
-tests/test_privacy_firewall.py::test_sanitize_ai_memo_guarantee PASSED   [ 23%]
-tests/test_privacy_firewall.py::test_intent_ticket_lifecycle_and_tampering_prevention PASSED [ 25%]
-tests/test_privacy_firewall.py::test_intent_ticket_expiration_protection PASSED [ 26%]
-tests/test_privacy_firewall.py::test_intent_ticket_fails_closed_on_firewall_violation PASSED [ 28%]
-tests/test_privacy_firewall.py::test_firewall_decision_triad_pass_warn_block PASSED [ 30%]
-tests/test_privacy_firewall.py::test_state_mutation_via_intent_ticket_in_firewall_audit PASSED [ 32%]
-tests/test_reference_vectors.py::test_bip350_valid_bech32m_reference_vectors PASSED [ 34%]
-tests/test_reference_vectors.py::test_bip350_invalid_bech32m_reference_vectors PASSED [ 36%]
-tests/test_reference_vectors.py::test_bech32m_arbitrary_payload_roundtrip PASSED [ 38%]
-tests/test_reference_vectors.py::test_zip321_rfc4648_unpadded_base64url_vectors PASSED [ 40%]
-tests/test_reference_vectors.py::test_zip321_uri_parsing_reference_vectors PASSED [ 42%]
-tests/test_reference_vectors.py::test_zip317_fee_calculation_against_reference_vectors PASSED [ 44%]
-tests/test_reference_vectors.py::test_f4jumble_invertibility_across_standard_buffer_sizes PASSED [ 46%]
-tests/test_reference_vectors.py::test_f4jumble_strictly_enforces_minimum_length_48_bytes PASSED [ 48%]
-tests/test_reference_vectors.py::test_compactsize_canonical_boundaries PASSED [ 50%]
-tests/test_server.py::test_fastmcp_server_initialization PASSED          [ 51%]
-tests/test_server.py::test_f4jumble_feistel_roundtrip PASSED             [ 53%]
-tests/test_server.py::test_f4jumble_rejects_short_messages PASSED        [ 55%]
-tests/test_server.py::test_compact_size_roundtrip PASSED                 [ 57%]
-tests/test_server.py::test_zip316_unified_address_generation_and_validation PASSED [ 59%]
-tests/test_server.py::test_zip316_rejects_both_p2pkh_and_p2sh PASSED     [ 61%]
-tests/test_server.py::test_zip316_rejects_transparent_only_ua PASSED     [ 63%]
-tests/test_server.py::test_zip316_ufvk_parsing PASSED                    [ 65%]
-tests/test_server.py::test_zip321_single_recipient_and_memo_roundtrip PASSED [ 67%]
-tests/test_server.py::test_zip321_rejects_oversized_512_byte_memo PASSED [ 69%]
-tests/test_server.py::test_zip321_rejects_memo_on_transparent_address PASSED [ 71%]
-tests/test_server.py::test_zip321_multi_recipient_payout_batch PASSED    [ 73%]
-tests/test_server.py::test_zip317_proportional_fee_mechanism PASSED      [ 75%]
-tests/test_server.py::test_airgap_loopback_policy_enforcement PASSED     [ 76%]
-tests/test_server.py::test_shielded_history_trial_decryption_and_aegis_reconciliation PASSED [ 78%]
-tests/test_server.py::test_lightwalletd_and_zebrad_queries PASSED        [ 80%]
-tests/test_server.py::test_user_prompt_1_address_generation_and_priority_fallback PASSED [ 82%]
-tests/test_server.py::test_user_prompt_2_parse_ufvk_viewing_key PASSED   [ 84%]
-tests/test_server.py::test_user_prompt_3_generate_50_zec_uri PASSED      [ 86%]
-tests/test_server.py::test_fastmcp_client_protocol_execution PASSED      [ 88%]
-tests/test_server.py::test_render_zip321_iso18004_qr PASSED              [ 90%]
+tests/test_privacy_firewall.py::test_firewall_neutralizes_prompt_injection_attempts PASSED [ 10%]
+tests/test_privacy_firewall.py::test_firewall_detects_viewing_key_in_memo PASSED [ 12%]
+tests/test_privacy_firewall.py::test_firewall_blocks_sub_zatoshi_and_invalid_amounts PASSED [ 14%]
+tests/test_privacy_firewall.py::test_firewall_enforces_loopback_rpc_policy PASSED [ 16%]
+tests/test_privacy_firewall.py::test_firewall_enforces_human_approval_boundary_for_state_changes PASSED [ 18%]
+tests/test_privacy_firewall.py::test_explain_privacy_violation_catalog PASSED [ 20%]
+tests/test_privacy_firewall.py::test_sanitize_ai_memo_guarantee PASSED   [ 21%]
+tests/test_privacy_firewall.py::test_intent_ticket_lifecycle_and_tampering_prevention PASSED [ 23%]
+tests/test_privacy_firewall.py::test_intent_ticket_expiration_protection PASSED [ 25%]
+tests/test_privacy_firewall.py::test_intent_ticket_fails_closed_on_firewall_violation PASSED [ 27%]
+tests/test_privacy_firewall.py::test_firewall_decision_triad_pass_warn_block PASSED [ 29%]
+tests/test_privacy_firewall.py::test_state_mutation_via_intent_ticket_in_firewall_audit PASSED [ 30%]
+tests/test_privacy_firewall.py::test_ai_cannot_self_authorize_without_human_approval PASSED [ 32%]
+tests/test_privacy_firewall.py::test_operator_rejection_blocks_broadcast_permanently PASSED [ 34%]
+tests/test_privacy_firewall.py::test_intent_vault_persistence_across_process_reset PASSED [ 36%]
+tests/test_reference_vectors.py::test_bip350_valid_bech32m_reference_vectors PASSED [ 38%]
+tests/test_reference_vectors.py::test_bip350_invalid_bech32m_reference_vectors PASSED [ 40%]
+tests/test_reference_vectors.py::test_bech32m_arbitrary_payload_roundtrip PASSED [ 41%]
+tests/test_reference_vectors.py::test_zip321_rfc4648_unpadded_base64url_vectors PASSED [ 43%]
+tests/test_reference_vectors.py::test_zip321_uri_parsing_reference_vectors PASSED [ 45%]
+tests/test_reference_vectors.py::test_zip317_fee_calculation_against_reference_vectors PASSED [ 47%]
+tests/test_reference_vectors.py::test_f4jumble_invertibility_across_standard_buffer_sizes PASSED [ 49%]
+tests/test_reference_vectors.py::test_f4jumble_strictly_enforces_minimum_length_48_bytes PASSED [ 50%]
+tests/test_reference_vectors.py::test_compactsize_canonical_boundaries PASSED [ 52%]
+tests/test_server.py::test_fastmcp_server_initialization PASSED          [ 54%]
+tests/test_server.py::test_f4jumble_feistel_roundtrip PASSED             [ 56%]
+tests/test_server.py::test_f4jumble_rejects_short_messages PASSED        [ 58%]
+tests/test_server.py::test_compact_size_roundtrip PASSED                 [ 60%]
+tests/test_server.py::test_zip316_unified_address_generation_and_validation PASSED [ 61%]
+tests/test_server.py::test_zip316_rejects_both_p2pkh_and_p2sh PASSED     [ 63%]
+tests/test_server.py::test_zip316_rejects_transparent_only_ua PASSED     [ 65%]
+tests/test_server.py::test_zip316_ufvk_parsing PASSED                    [ 67%]
+tests/test_server.py::test_zip321_single_recipient_and_memo_roundtrip PASSED [ 69%]
+tests/test_server.py::test_zip321_rejects_oversized_512_byte_memo PASSED [ 70%]
+tests/test_server.py::test_zip321_rejects_memo_on_transparent_address PASSED [ 72%]
+tests/test_server.py::test_zip321_multi_recipient_payout_batch PASSED    [ 74%]
+tests/test_server.py::test_zip317_proportional_fee_mechanism PASSED      [ 76%]
+tests/test_server.py::test_airgap_loopback_policy_enforcement PASSED     [ 78%]
+tests/test_server.py::test_shielded_history_trial_decryption_and_aegis_reconciliation PASSED [ 80%]
+tests/test_server.py::test_lightwalletd_and_zebrad_queries PASSED        [ 81%]
+tests/test_server.py::test_user_prompt_1_address_generation_and_priority_fallback PASSED [ 83%]
+tests/test_server.py::test_user_prompt_2_parse_ufvk_viewing_key PASSED   [ 85%]
+tests/test_server.py::test_user_prompt_3_generate_50_zec_uri PASSED      [ 87%]
+tests/test_server.py::test_fastmcp_client_protocol_execution PASSED      [ 89%]
+tests/test_render_zip321_iso18004_qr PASSED                              [ 90%]
 tests/test_server.py::test_fail_closed_missing_address_in_zip321 PASSED  [ 92%]
 tests/test_server.py::test_fail_closed_missing_ufvk_without_explicit_fixture PASSED [ 94%]
 tests/test_server.py::test_zip326_ironwood_pool_routing_and_orchard_receiver_reuse PASSED [ 96%]
 tests/test_server.py::test_zecshield_privacy_leak_detector PASSED        [ 98%]
 tests/test_server.py::test_ai_memo_redaction_for_host_safety PASSED      [100%]
 
-============================= 52 passed in 17.03s =============================
+============================= 55 passed in 18.70s =============================
 ```
-
 ---
 
 ## 06 // Quickstart for Judges

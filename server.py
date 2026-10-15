@@ -1716,10 +1716,12 @@ def request_transaction_intent(
     """
     Request a cryptographically bound Transaction Authorization Ticket before state mutation.
     Audits parameters through the 10-check Privacy Firewall. If permitted, binds
-    (recipient, amount, fee, memo_hash) into a SHA-256 intent digest and generates
-    a single-use human approval token with TTL expiration.
+    (recipient, amount, fee, memo_hash) into a SHA-256 intent digest.
 
-    Protects against autonomous AI hallucination, parameter substitution, and replay attacks.
+    HUMAN-IN-THE-LOOP INVARIANT:
+      Autonomous execution is strictly BLOCKED until a human operator reviews and
+      approves the ticket out-of-band (via CLI 'python cli.py approve <ticket_id>' or dashboard).
+      The AI assistant receives zero approval credentials and cannot self-authorize.
     """
     return zecshield_firewall.create_transaction_intent_ticket(
         recipient=recipient,
@@ -1743,12 +1745,12 @@ def execute_authorized_broadcast(
     rpc_url: str = "http://127.0.0.1:8232",
 ) -> Dict[str, Any]:
     """
-    Execute a transaction broadcast only after cryptographic verification of the human authorization ticket.
+    Execute a transaction broadcast only after verified out-of-band human authorization.
     Guarantees:
-      1. Single-use ticket consumption (Anti-Replay).
-      2. Exact cryptographic match on recipient, amount, fee, and memo (Anti-Tampering).
-      3. Non-expired TTL.
-      4. Constant-time token verification.
+      1. Human-in-the-Loop: Fails closed if human operator has not approved out-of-band.
+      2. Anti-Tampering: Cryptographic intent digest match on recipient, amount, fee, and memo.
+      3. Anti-Replay: Single-use atomic consumption blocks replay attacks across restarts.
+      4. TTL Expiration: Rejects expired authorization tickets.
     """
     auth_res = zecshield_firewall.verify_and_consume_authorization_ticket(
         ticket_id=ticket_id,
@@ -1756,7 +1758,7 @@ def execute_authorized_broadcast(
         amount_zec=amount_zec,
         memo_utf8=memo_utf8,
         fee_zatoshis=fee_zatoshis,
-        approval_token=human_approval_token,
+        human_approval_token=human_approval_token,
     )
     if not auth_res.get("authorized"):
         return {

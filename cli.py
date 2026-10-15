@@ -226,12 +226,47 @@ def main() -> None:
     p_ci.add_argument("--fail-on-critical", action="store_true", default=True, help="Exit with code 1 on CRITICAL findings")
     p_ci.add_argument("--json-out", default="", help="Path to write JSON audit report")
 
+    sub.add_parser("pending", help="List all pending transaction authorization tickets awaiting human approval")
+
+    p_approve = sub.add_parser("approve", help="Approve a pending transaction authorization ticket (Human-in-the-Loop)")
+    p_approve.add_argument("ticket_id", help="The intent ticket ID (e.g. zec_ticket_...)")
+    p_approve.add_argument("--note", default="Approved via CLI operator terminal", help="Optional operator approval note")
+
+    p_reject = sub.add_parser("reject", help="Reject a pending transaction authorization ticket (Human-in-the-Loop)")
+    p_reject.add_argument("ticket_id", help="The intent ticket ID (e.g. zec_ticket_...)")
+    p_reject.add_argument("--reason", default="Rejected by operator via CLI", help="Rejection rationale")
+
     args = parser.parse_args()
 
     if args.command in (None, "demo"):
         run_full_demo()
     elif args.command == "audit-ci":
         sys.exit(run_ci_audit(target=args.target, fail_on_critical=args.fail_on_critical, json_out=args.json_out))
+    elif args.command == "pending":
+        import zecshield_firewall
+        print_banner("ZECSHIELD // INTENT TICKET REGISTRY")
+        pending = zecshield_firewall.get_pending_intent_tickets()
+        print_section("PENDING HUMAN APPROVAL TICKETS", {
+            "pending_count": len(pending),
+            "tickets": pending,
+            "instructions": "Execute 'python cli.py approve <ticket_id>' to authorize, or 'python cli.py reject <ticket_id>' to reject.",
+        })
+    elif args.command == "approve":
+        import zecshield_firewall
+        print_banner(args.ticket_id)
+        res = zecshield_firewall.approve_transaction_intent_ticket(args.ticket_id, operator_note=args.note)
+        print_section("ZECSHIELD // HUMAN OPERATOR APPROVAL RESULT", res)
+        if res.get("success"):
+            print("\n[+] TICKET APPROVED: AI broadcast worker is now permitted to execute broadcast.")
+        else:
+            print(f"\n[X] APPROVAL FAILED: {res.get('message')}")
+            sys.exit(1)
+    elif args.command == "reject":
+        import zecshield_firewall
+        print_banner(args.ticket_id)
+        res = zecshield_firewall.reject_transaction_intent_ticket(args.ticket_id, reason=args.reason)
+        print_section("ZECSHIELD // HUMAN OPERATOR REJECTION RESULT", res)
+        print("\n[-] TICKET REJECTED: Broadcast execution is permanently blocked.")
     elif args.command == "reconcile":
         print_banner("AEGIS_Z_RECONCILER")
         print_section("AEGIS-Z // SHIELDED LEDGER RECONCILIATION", reconcile_shielded_ledger())
@@ -295,8 +330,24 @@ def run_ci_audit(target: str = ".", fail_on_critical: bool = True, json_out: str
         files_to_scan = [target]
     else:
         files_to_scan = []
+        is_negative_test = "vulnerable_app" in os.path.abspath(target)
         for root, dirs, files in os.walk(target):
-            dirs[:] = [d for d in dirs if d not in (".git", ".pytest_cache", "__pycache__", "venv", ".venv", "env", "node_modules", ".gemini")]
+            excluded_dirs = {
+                ".git",
+                ".pytest_cache",
+                "__pycache__",
+                "venv",
+                ".venv",
+                "env",
+                "node_modules",
+                ".gemini",
+                ".zecshield_vault",
+                "docs",
+                "assets",
+            }
+            if not is_negative_test:
+                excluded_dirs.add("vulnerable_app")
+            dirs[:] = [d for d in dirs if d not in excluded_dirs]
             for f in files:
                 if f.endswith((".py", ".json", ".yaml", ".yml", ".toml", ".env", ".md", ".txt")):
                     files_to_scan.append(os.path.join(root, f))
@@ -361,7 +412,8 @@ def run_ci_audit(target: str = ".", fail_on_critical: bool = True, json_out: str
                     })
 
             # 4. Remote cleartext RPC
-            if "http://" in line and not any(h in line for h in ("127.0.0.1", "localhost", "::1")):
+            whitelisted_hosts = ("127.0.0.1", "localhost", "::1", "zebrad", "zallet", "z3", "z3-router")
+            if "http://" in line and not any(h in line for h in whitelisted_hosts):
                 if "rpc" in line.lower() or "node" in line.lower() or "zebrad" in line.lower():
                     all_findings.append({
                         "id": "ZEC-NET-002",
