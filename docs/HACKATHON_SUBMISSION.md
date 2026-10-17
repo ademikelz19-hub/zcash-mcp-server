@@ -5,6 +5,7 @@
 **Tagline:** "Build on Zcash with AI. Test everything. Leak nothing unnecessarily."  
 **Repository:** `https://github.com/ademikelz19-hub/zcash-mcp-server`  
 **Latest CI Run:** [GitHub Actions Run #38799032412](https://github.com/ademikelz19-hub/zcash-mcp-server/actions) (100% Passing)  
+**Demonstration Video:** Included in repository as [`zecshield_demo_video.mp4`](../zecshield_demo_video.mp4) (1080p Full HD with synchronized voiceover narration, 2m 32s)  
 **License:** MIT  
 
 ---

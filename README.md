@@ -21,6 +21,7 @@
 
 ## Documentation Index
 
+- [Full HD 1080p Video Demonstration (2m 32s)](zecshield_demo_video.mp4)
 - [Independent Technical Evidence Report & Audit](docs/EVIDENCE_REPORT.md)
 - [Architecture & Technical Design](docs/ARCHITECTURE.md)
 - [Zcash Foundation Z3 Integration Guide](docs/INTEGRATION_GUIDE.md)
