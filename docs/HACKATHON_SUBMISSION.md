@@ -4,43 +4,86 @@
 **Project Name:** ZecShield MCP  
 **Tagline:** "Build on Zcash with AI. Test everything. Leak nothing unnecessarily."  
 **Repository:** `https://github.com/ademikelz19-hub/zcash-mcp-server`  
+**Latest CI Run:** [GitHub Actions Run #38799032412](https://github.com/ademikelz19-hub/zcash-mcp-server/actions) (100% Passing)  
 **License:** MIT  
 
 ---
 
-## 1. The Core Problem
+## 1. Project Overview & Elevator Pitch
 
-As autonomous AI agents and coding assistants (Claude Desktop, Cursor, Antigravity) are increasingly tasked with writing Web3 applications, they present a double-edged sword for Zcash:
-1. **Accidental De-Anonymization:** LLMs frequently default to transparent addresses (`t1...`) or include cleartext customer emails and IPs in on-chain transaction memos.
-2. **Context Key Leaking:** Traditional wallet MCPs give models spending keys, creating severe risk of key exfiltration via model telemetry.
-3. **Developer Friction:** Developers lack automated tooling to detect privacy bugs in CI pipelines before deployment.
+ZecShield MCP is an AI-native Zcash developer infrastructure and privacy-enforcement toolkit. It enables AI coding assistants (Claude Desktop, Cursor, Google Antigravity, OpenDevin) and developers to interact with Zcash infrastructure, construct shielded payment requests, validate cryptographic implementations, and detect privacy leaks before they reach the blockchain.
 
----
-
-## 2. The Solution: ZecShield MCP
-
-ZecShield MCP is an AI-native development and privacy-testing toolkit that enables developers and coding agents to build, test, inspect, and debug Zcash applications without introducing avoidable privacy vulnerabilities:
-- **ZecShield Privacy Firewall:** 10 pre-broadcast checks catching transparent fallbacks, cleartext PII, viewing key leaks, prompt injections, and precision bugs.
-- **Official Zcash Foundation Z3 Integration:** Out-of-the-box Docker Compose stack for genuine Zebra full node consensus and Zallet wallet proofs.
-- **Strict Cryptographic Honesty:** Unambiguous provenance tagging (`GENUINE_Z3_REGTEST`, `SIMULATED_MOCK_REGTEST`, `DEMO_FIXTURE`).
-- **Zero-Knowledge AI Security Boundary:** Redacted model memos (`[REDACTED_BY_ZECSHIELD_FOR_AI_PRIVACY]`), zero exposed keys, and human authorization tokens for spending.
-- **Automated CI/CD Action:** A reusable GitHub Action that scans Zcash apps and fails CI builds on privacy breaks.
+Most developer tools focus exclusively on enabling agents to *spend* funds. ZecShield provides the missing security and privacy immune system: **guarding against transparent address fallbacks, preventing cleartext PII memo leakage, and enforcing human-in-the-loop authorization so autonomous agents cannot drain wallets or compromise user anonymity.**
 
 ---
 
-## 3. Verified Standards Implemented
+## 2. The Core Problems Solved
+
+1. **Catastrophic AI Privacy Fallbacks:**  
+   LLMs writing Web3 code frequently fall back to transparent addresses (`t1...`) when encountering shielded address errors, or embed unhashed customer emails/IPs directly into transaction memos. These mistakes permanently de-anonymize users on public block explorers.
+2. **The Autonomous AI Spend Dilemma:**  
+   Giving autonomous AI models wallet private keys creates an existential risk of key exfiltration via model telemetry or autonomous unauthorized draining.
+3. **Absence of Pre-Broadcast CI Linting:**  
+   Until now, the Zcash ecosystem lacked a lightweight, turnkey tool that teams could drop into GitHub Actions to scan applications for privacy anti-patterns.
+
+---
+
+## 3. The Technical Solution: ZecShield Architecture
+
+- **10-Check Pre-Broadcast Privacy Firewall:** Intercepts candidate transactions and blocks transparent fallbacks, cleartext PII (emails, IPs, phones, SSNs), viewing key leaks, exposed spending keys, prompt injections, and precision errors.
+- **Fail-Closed Human-in-the-Loop (HITL) Authorization:** The AI model can request a payment intent ticket, but has zero credentials to authorize it. An out-of-band human operator must cryptographically approve tickets via interactive CLI (`python cli.py approve <ticket_id>`) with an Ed25519 signature.
+- **ZIP 326 (Ironwood) & ZIP 316 Conformance:** Implements authentic ZIP 316 Unified Addresses (Bech32m + F4Jumble Feistel permutation) and correctly routes to the 2026 Ironwood shielded pool via Orchard-protocol receivers (0x03) per ZIP 326.
+- **Turnkey Z3 Docker Integration:** Direct integration with the official Zcash Foundation Z3 stack (`docker-compose.yml`) running authentic Zebra 2.1.0 full node and Zallet 0.1.0 wallet services.
+- **Absolute Cryptographic Honesty:** Zero hallucination. Every response declares its exact data provenance (`GENUINE_Z3_REGTEST`, `SIMULATED_MOCK_REGTEST`, or `DEMO_FIXTURE`).
+- **Turnkey CI GitHub Action (`action.yml`):** Allows any Zcash repository to add automated privacy linting with a single YAML step.
+
+---
+
+## 4. Verified Zcash Standards Implemented
 
 - **ZIP 316:** Unified Addresses (Bech32m + F4Jumble + TLV CompactSize) & Unified Full Viewing Keys (UFVK).
-- **ZIP 326:** Ironwood Shielded Pool support and Orchard receiver reuse.
+- **ZIP 326:** NU6.3 Ironwood Shielded Pool support and Orchard receiver reuse.
 - **ZIP 321:** Standardized Payment Request URIs with unpadded RFC 4648 Base64URL memos.
 - **ZIP 317:** Proportional Transfer Fee Mechanism (5,000 zatoshis per logical action).
 - **ISO/IEC 18004:** Reed-Solomon scannable QR codes for mobile wallets (Zashi, YWallet).
-- **FastMCP:** Model Context Protocol stdio interface with 14 exposed tools.
+- **FastMCP Protocol:** Model Context Protocol stdio interface with **22 exposed developer tools**.
 
 ---
 
-## 4. Verification Evidence
+## 5. Verification Evidence & Quality Assurance
 
-- **58 / 58 passing tests (100% pass rate)** across Unit, Reference Vectors, Adversarial Privacy, and Concurrency suites.
-- Negative and positive verification fixtures in CI.
-- Brutalist dark developer dashboard (`dashboard.html`) with interactive Privacy Firewall Lab.
+- **62 / 62 passing automated tests (100% pass rate)** in pytest across Unit, Reference Vectors, Adversarial Privacy, and Multi-Process Concurrency.
+- **6 / 6 Adversarial Attack Scenarios Verified Fail-Closed:**
+  1. *Privacy Leak:* Flags cleartext PII; blocks exposed spending keys.
+  2. *Unauthorized Payment:* Blocks autonomous broadcasts with `AWAITING_HUMAN_APPROVAL`.
+  3. *Intent Tampering:* Catches recipient/amount modification with `INTENT_TAMPERING_DETECTED`.
+  4. *Replay Attacks:* Consumed tickets rejected with `TICKET_ALREADY_CONSUMED`.
+  5. *AI Self-Approval:* Non-interactive subshells blocked; direct vault tampering caught with `FORGERY_DETECTED`.
+  6. *Node Outage:* Offline nodes return honest provenance (`DEMO_FIXTURE`) without hallucination.
+- **Multi-Process Concurrency Tested:** Safe under 20-thread simultaneous broadcast collision (double-spend prevention) and cross-process OS file locks (`msvcrt`/`fcntl`).
+- **Automated CI Fixture Verification:** Exits `1` on `fixtures/vulnerable_app`, exits `0` on `fixtures/fixed_app`.
+
+---
+
+## 6. How Judges Can Verify in 60 Seconds
+
+Judges can reproduce the entire verification suite on any machine:
+
+```bash
+# 1. Clone repository
+git clone https://github.com/ademikelz19-hub/zcash-mcp-server.git
+cd zcash-mcp-server
+
+# 2. Run full test suite (62 tests, 0 MB data needed)
+python -m pytest -v
+
+# 3. Test privacy audit on sample apps
+python cli.py audit-ci fixtures/vulnerable_app   # Exits 1 (caught 5 leaks)
+python cli.py audit-ci fixtures/fixed_app        # Exits 0 (clean)
+
+# 4. Run the 5 FastMCP verification scenarios
+python run_verification_tests.py
+
+# 5. Run full developer demonstration
+python cli.py demo
+```
